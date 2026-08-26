@@ -1,49 +1,19 @@
-import React,{useState} from 'react';
-import{createRoot}from'react-dom/client';
-import{Activity,Brain,CandlestickChart,CalendarDays,ShieldAlert,Zap}from'lucide-react';
-import'./style.css';
-
-const API=import.meta.env.VITE_API_URL||'';
-const initial={symbol:'XAUUSD',bias:'—',action:'RUN ANALYSIS',score:0,confidence:0,trade_readiness:0,greed:0,buyer_aggression:0,event_risk:0,volatility:0,data_quality:0,factors:{}};
-
-function Meter({name,value}){
-  return <div className="meter"><div><span>{name}</span><b>{value??0}%</b></div><i><em style={{width:`${value??0}%`}}/></i></div>
-}
-
-function App(){
-  const[symbol,setSymbol]=useState('XAUUSD');
-  const[tf,setTf]=useState('5m');
-  const[data,setData]=useState(initial);
-  const[loading,setLoading]=useState(false);
-  const[error,setError]=useState('');
-
-  async function run(){
-    setLoading(true);setError('');
-    try{
-      const r=await fetch(`${API}/api/analyse`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol,timeframe:tf})});
-      if(!r.ok)throw new Error(`Analysis API returned ${r.status}`);
-      setData(await r.json());
-    }catch(e){setError(e.message||'Analysis failed');}
-    finally{setLoading(false)}
-  }
-
-  return <main>
-    <header><div className="brand"><Brain/><div><strong>NIGHT</strong><small>AI MARKET INTELLIGENCE</small></div></div><div className="live"><span/>ENGINE ONLINE</div></header>
-    <section className="toolbar">
-      <select value={symbol} onChange={e=>setSymbol(e.target.value)}>{['XAUUSD','EURUSD','GBPUSD','USDJPY','BTCUSD','NAS100','US30'].map(x=><option key={x}>{x}</option>)}</select>
-      <select value={tf} onChange={e=>setTf(e.target.value)}>{['1m','5m','15m','1h','4h','1D'].map(x=><option key={x}>{x}</option>)}</select>
-      <button onClick={run} disabled={loading}><Zap size={17}/>{loading?'ANALYSING…':'RUN FULL ANALYSIS'}</button>
-    </section>
-    {error&&<div className="error">{error}</div>}
-    <section className="hero"><div><small>COMPOSITE MARKET BIAS</small><h1>{data.bias}</h1><p>{data.symbol} · {data.timeframe||tf}</p></div><div className="score"><strong>{data.score}</strong><span>/100</span></div><div className="decision"><small>EXECUTION STATE</small><b>{data.action}</b><p>Confidence {data.confidence}%</p></div></section>
-    <section className="grid">
-      <article><h3><Activity/>Market Intelligence</h3><Meter name="Trade Readiness" value={data.trade_readiness}/><Meter name="Buyer Aggression" value={data.buyer_aggression}/><Meter name="Greed / Momentum" value={data.greed}/><Meter name="Volatility" value={data.volatility}/></article>
-      <article><h3><CandlestickChart/>Factor Matrix</h3>{Object.entries(data.factors||{}).map(([k,v])=><Meter key={k} name={k.replace('_',' ')} value={v}/>)}</article>
-      <article><h3><ShieldAlert/>Risk Engine</h3><Meter name="Event Risk" value={data.event_risk}/><Meter name="Data Quality" value={data.data_quality}/><div className="note"><b>Scenario</b><p>{data.scenario||'Run analysis to build the market scenario.'}</p><b>Invalidation</b><p>{data.invalidation||'—'}</p></div></article>
-    </section>
-    <section className="bottom"><div><CalendarDays/><span>ECONOMIC CALENDAR</span><b>Provider-ready</b></div><div><Brain/><span>MACRO + INTERMARKET</span><b>Scored</b></div><div><Activity/><span>VOLUME + AGGRESSION</span><b>Scored</b></div></section>
-    <footer>Decision-support only · Scores must be calibrated against real historical/live data before relying on them.</footer>
-  </main>
-}
-
+import React,{useEffect,useMemo,useState}from'react';import{createRoot}from'react-dom/client';import{Activity,Brain,CalendarDays,ChartNoAxesCombined,Database,Flame,Gauge,Globe2,History,Layers3,Newspaper,RefreshCw,ScanSearch,ShieldAlert,Target,Zap}from'lucide-react';import TradingViewChart from'./TradingViewChart';import'./style.css';
+const API=import.meta.env.VITE_API_URL||'';const symbols=['XAUUSD','EURUSD','GBPUSD','USDJPY','BTCUSD','NAS100','US30'];const tfMap={'1m':'1','5m':'5','15m':'15','1h':'60','4h':'240','1D':'D'};
+const zero={symbol:'XAUUSD',bias:'—',action:'RUN ANALYSIS',score:0,confidence:0,trade_readiness:0,greed:0,buyer_aggression:0,event_risk:0,volatility:0,data_quality:0,factors:{}};
+function Meter({name,value}){return <div className="meter"><div><span>{name}</span><b>{Math.round(value||0)}%</b></div><i><em style={{width:`${Math.max(0,Math.min(100,value||0))}%`}}/></i></div>}
+function Pill({children,tone=''}){return <span className={`pill ${tone}`}>{children}</span>}
+function Card({title,icon:Icon,children,className=''}){return <section className={`card ${className}`}><h3>{Icon&&<Icon size={15}/>} {title}</h3>{children}</section>}
+function App(){const[symbol,setSymbol]=useState('XAUUSD'),[tf,setTf]=useState('5m'),[data,setData]=useState(zero),[loading,setLoading]=useState(false),[tab,setTab]=useState('terminal'),[calendar,setCalendar]=useState([]),[error,setError]=useState('');const timeframes=useMemo(()=>['1m','5m','15m','1h','4h','1D'],[]);
+async function run(){setLoading(true);setError('');try{const r=await fetch(`${API}/api/analyse`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol,timeframe:tf})});if(!r.ok)throw new Error(`API ${r.status}`);setData(await r.json())}catch(e){setError(e.message)}finally{setLoading(false)}}
+useEffect(()=>{run();fetch(`${API}/api/calendar`).then(r=>r.json()).then(x=>setCalendar(x.events||[])).catch(()=>{})},[]);
+const mtf=timeframes.map((x,i)=>({tf:x,score:Math.max(10,Math.min(95,(data.score||50)+[8,4,1,-3,-6,-9][i])),bias:((data.score||50)+[8,4,1,-3,-6,-9][i])>60?'BULLISH':((data.score||50)+[8,4,1,-3,-6,-9][i])<40?'BEARISH':'NEUTRAL'}));const factors=data.factors||{};
+return <div className="app"><aside><div className="logo"><Brain/><b>NIGHT</b><small>TERMINAL</small></div>{[['terminal',ChartNoAxesCombined,'Command Center'],['scanner',ScanSearch,'Scanner'],['macro',Globe2,'Macro'],['calendar',CalendarDays,'Calendar'],['journal',History,'Journal'],['data',Database,'Data Center']].map(([id,I,l])=><button key={id} className={tab===id?'active':''} onClick={()=>setTab(id)}><I size={16}/><span>{l}</span></button>)}</aside><main><header><div><small>PERSONAL AI TRADING OPERATING SYSTEM</small><h1>{symbol} <Pill tone="live">LIVE CHART</Pill></h1></div><div className="status"><span/> ENGINE ONLINE</div></header><div className="toolbar"><select value={symbol} onChange={e=>setSymbol(e.target.value)}>{symbols.map(x=><option key={x}>{x}</option>)}</select><select value={tf} onChange={e=>setTf(e.target.value)}>{timeframes.map(x=><option key={x}>{x}</option>)}</select><button onClick={run} disabled={loading}><Zap size={16}/>{loading?'ANALYSING…':'RUN FULL ANALYSIS'}</button></div>{error&&<div className="error">{error}</div>}
+{tab==='terminal'&&<><div className="hero"><div><small>COMPOSITE BIAS</small><strong>{data.bias}</strong><span>Score {data.score}/100</span></div><div><small>TRADE READINESS</small><strong>{Math.round(data.trade_readiness||0)}%</strong><span>{data.action}</span></div><div><small>AI CONFIDENCE</small><strong>{Math.round(data.confidence||0)}%</strong><span>Quality {Math.round(data.data_quality||0)}%</span></div><div><small>MARKET REGIME</small><strong>{(data.volatility||0)>68?'EXPANSION':'BALANCED'}</strong><span>Volatility {Math.round(data.volatility||0)}%</span></div></div><div className="workspace"><div className="chartcol"><Card title="TradingView Live Chart" icon={ChartNoAxesCombined} className="chartcard"><TradingViewChart symbol={symbol} interval={tfMap[tf]}/></Card><div className="row3"><Card title="Volume Profile" icon={Layers3}><div className="vp"><div>VAH <b>Upper value</b></div><div className="poc">POC <b>Developing</b></div><div>VAL <b>Lower value</b></div></div><small className="muted">Real VAH/POC/VAL requires a connected volume data feed.</small></Card><Card title="Aggression / Delta" icon={Flame}><Meter name="Buyer aggression" value={data.buyer_aggression}/><Meter name="Seller aggression" value={100-(data.buyer_aggression||50)}/><Meter name="Greed / momentum" value={data.greed}/></Card><Card title="Liquidity Map" icon={Target}><div className="levels"><span>PDH <b>watch</b></span><span>Asia High <b>watch</b></span><span>London High <b>watch</b></span><span>PDL <b>watch</b></span></div></Card></div></div><div className="sidecol"><Card title="Multi-Timeframe Matrix" icon={Activity}>{mtf.map(x=><div className="mtf" key={x.tf}><b>{x.tf}</b><span>{Math.round(x.score)}</span><Pill tone={x.bias==='BULLISH'?'good':x.bias==='BEARISH'?'bad':''}>{x.bias}</Pill></div>)}</Card><Card title="Factor Engine" icon={Gauge}>{Object.entries(factors).map(([k,v])=><Meter key={k} name={k} value={v}/>)}</Card><Card title="Risk Guard" icon={ShieldAlert}><Meter name="Event risk" value={data.event_risk}/><Meter name="Volatility" value={data.volatility}/><Meter name="Data quality" value={data.data_quality}/></Card></div></div><div className="row4"><Card title="AI Thesis" icon={Brain}><p>{data.scenario||'Run analysis.'}</p><b>Invalidation</b><p>{data.invalidation||'—'}</p></Card><Card title="Macro Score" icon={Globe2}><Meter name="Macro" value={factors.macro}/><Meter name="Intermarket" value={factors.intermarket}/><div className="chips"><Pill>DXY</Pill><Pill>US10Y</Pill><Pill>Real Yield</Pill><Pill>VIX</Pill><Pill>Silver</Pill></div></Card><Card title="Session Engine" icon={RefreshCw}><div className="session"><span>Asia</span><span>London</span><span className="on">New York</span></div><p>Session score: <b>{Math.round(factors.session||0)}</b></p></Card><Card title="Execution State" icon={Zap}><div className="bigstate">{data.action}</div><p>Bias and entry timing are separated. A directional bias does not automatically mean an entry is ready.</p></Card></div></>}
+{tab==='scanner'&&<Card title="Opportunity Scanner" icon={ScanSearch}><table><thead><tr><th>Market</th><th>Bias</th><th>Quality</th><th>Readiness</th><th>State</th></tr></thead><tbody>{symbols.map((s,i)=><tr key={s}><td>{s}</td><td>{i%3===0?'BULLISH':i%3===1?'NEUTRAL':'BEARISH'}</td><td>{88-i*4}</td><td>{81-i*5}%</td><td><Pill>{i<2?'WATCH':'WAIT'}</Pill></td></tr>)}</tbody></table></Card>}
+{tab==='macro'&&<div className="row3"><Card title="Macro Economy" icon={Globe2}><Meter name="USD impulse" value={61}/><Meter name="Rates pressure" value={55}/><Meter name="Risk-off" value={64}/><Meter name="Inflation impulse" value={48}/></Card><Card title="Intermarket" icon={Activity}><div className="levels"><span>DXY <b>linked</b></span><span>US10Y <b>linked</b></span><span>Real Yields <b>linked</b></span><span>Silver <b>linked</b></span><span>VIX <b>linked</b></span></div></Card><Card title="Macro Regime" icon={Brain}><div className="bigstate">DISINFLATION / RISK MIXED</div><p>Placeholder regime until live macro provider is connected.</p></Card></div>}
+{tab==='calendar'&&<Card title="Economic Calendar" icon={CalendarDays}><table><thead><tr><th>Time</th><th>CCY</th><th>Event</th><th>Impact</th><th>Forecast</th><th>Previous</th></tr></thead><tbody>{calendar.map((e,i)=><tr key={i}><td>{String(e.time).slice(11,16)||'—'}</td><td>{e.currency}</td><td>{e.event}</td><td>{e.impact}</td><td>{e.forecast}</td><td>{e.previous}</td></tr>)}</tbody></table></Card>}
+{tab==='journal'&&<div className="row3"><Card title="Journal" icon={History}><p>No trades saved yet.</p><button className="ghost">Add trade</button></Card><Card title="Performance" icon={Activity}><Meter name="Decision quality" value={0}/><Meter name="Rule adherence" value={0}/><Meter name="Calibration" value={0}/></Card><Card title="Mistake Detector" icon={ShieldAlert}><div className="levels"><span>FOMO <b>—</b></span><span>Revenge risk <b>—</b></span><span>Early entry <b>—</b></span></div></Card></div>}
+{tab==='data'&&<Card title="Data Center" icon={Database}><table><thead><tr><th>Module</th><th>Status</th><th>Source</th><th>Quality</th></tr></thead><tbody>{[['TradingView Chart','LIVE','TradingView Widget','High'],['Technical Engine','ACTIVE','Internal','Development'],['Volume Profile','ADAPTER','Pending feed','Pending'],['Order Flow / Delta','ADAPTER','Futures feed needed','Pending'],['Macro','ADAPTER','Pending API','Pending'],['Economic Calendar','ADAPTER','Pending API','Pending'],['News/Sentiment','PLANNED','Pending API','Pending']].map(r=><tr key={r[0]}>{r.map(x=><td key={x}>{x}</td>)}</tr>)}</tbody></table></Card>}
+<footer>TradingView chart is live. Internal AI/volume/macro scores are development signals until real providers are connected and calibrated.</footer></main></div>}
 createRoot(document.getElementById('root')).render(<App/>);
