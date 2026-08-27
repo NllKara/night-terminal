@@ -5,18 +5,25 @@ const TF_MS={'1m':60000,'5m':300000,'15m':900000,'1h':3600000,'4h':14400000,'1D'
 
 export default function LiveMarketStream({symbol,timeframe='5m',apiKey,credentials={},apiBase='',onPrice,onQuant}){
  const[status,setStatus]=useState('CONNECTING'),[price,setPrice]=useState(null),[last,setLast]=useState(null),[latency,setLatency]=useState(null),[barsReady,setBarsReady]=useState(0);
- const wsRef=useRef(null),barsRef=useRef([]),timerRef=useRef(null),lastQuantRef=useRef(0);
+ const wsRef=useRef(null),barsRef=useRef([]),timerRef=useRef(null),lastQuantRef=useRef(0),priceRef=useRef(null);
  useEffect(()=>{
   let alive=true,heartbeat=null;
+  setStatus('CONNECTING');setPrice(null);setLast(null);setLatency(null);setBarsReady(0);priceRef.current=null;barsRef.current=[];
+  onQuant?.({last_price:null,realtime_price:false,live_symbol:symbol,source:'Waiting for live '+symbol+' feed'});
   const tfms=TF_MS[timeframe]||300000;
   const post=async(path,body)=>{const r=await fetch(`${apiBase}${path}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(!r.ok)throw new Error(`API ${r.status}`);return r.json()};
   const seed=async()=>{try{const j=await post('/api/bars',{symbol,timeframe,credentials});barsRef.current=(j.bars||[]).slice(-220).map(b=>({...b,volume:Number(b.volume||0)}));setBarsReady(barsRef.current.length)}catch{barsRef.current=[];setBarsReady(0)}};
-  const analyseNow=async(source,volumeType)=>{if(!alive||barsRef.current.length<30)return;const now=Date.now();if(now-lastQuantRef.current<2500)return;lastQuantRef.current=now;try{const j=await post('/api/analyse-bars',{symbol,timeframe,bars:barsRef.current.slice(-220),credentials,source,volume_type:volumeType});if(alive)onQuant?.(j)}catch{}};
+  const analyseNow=async(source,volumeType)=>{if(!alive||barsRef.current.length<30)return;const now=Date.now();if(now-lastQuantRef.current<2500)return;lastQuantRef.current=now;try{const j=await post('/api/analyse-bars',{symbol,timeframe,bars:barsRef.current.slice(-220),credentials,source,volume_type:volumeType});if(alive)onQuant?.({...j,realtime_price:true,live_symbol:symbol})}catch{}};
   const ingest=(p,ts,qty=1,source='Twelve Data WebSocket',volumeType='tick volume')=>{
     if(!alive||!Number.isFinite(p))return;
     const eventMs=ts?(Number(ts)>1e12?Number(ts):Number(ts)*1000):Date.now();
-    setLast(x=>price??x);setPrice(p);setLatency(Math.max(0,Date.now()-eventMs));setStatus('LIVE');onPrice?.(p,eventMs);
+    const prev=priceRef.current;priceRef.current=p;setLast(prev);setPrice(p);setLatency(Math.max(0,Date.now()-eventMs));setStatus('LIVE');onPrice?.(p,eventMs);
+    // Reference/Execution price is overwritten immediately by the active symbol's live tick.
+    onQuant?.({last_price:p,realtime_price:true,live_symbol:symbol,source,volume_type:volumeType});
     const bucket=Math.floor(eventMs/tfms)*tfms;const bars=barsRef.current;let b=bars[bars.length-1];
+    // Reject cross-instrument/stale seeds. If the historical tail is wildly different from the live quote,
+    // do not let it contaminate execution or quant outputs.
+    if(b&&Number(b.close)>0&&Math.abs(p/Number(b.close)-1)>0.035){barsRef.current=[];bars.length=0;b=null;setBarsReady(0)}
     if(!b||Number(b.time)!==bucket){b={time:bucket,open:p,high:p,low:p,close:p,volume:Math.max(0,Number(qty)||1)};bars.push(b);if(bars.length>240)bars.shift()}
     else{b.high=Math.max(Number(b.high),p);b.low=Math.min(Number(b.low),p);b.close=p;b.volume=Number(b.volume||0)+Math.max(0,Number(qty)||1)}
     setBarsReady(bars.length);clearTimeout(timerRef.current);timerRef.current=setTimeout(()=>analyseNow(source,volumeType),450);
