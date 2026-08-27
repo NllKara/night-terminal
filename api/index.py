@@ -7,7 +7,7 @@ from api.providers import MarketProvider, MacroProvider
 from api.intelligence import intelligence_snapshot, fetch_news, fetch_cot_gold
 from api.market_activity import activity_snapshot, oil_snapshot, shipping_snapshot
 
-app = FastAPI(title="NIGHT Quant Terminal API", version="0.5.0")
+app = FastAPI(title="NIGHT Quant Terminal API", version="0.6.0")
 market = MarketProvider()
 macro = MacroProvider()
 
@@ -23,6 +23,15 @@ class AnalysisRequest(BaseModel):
     symbol: str = "XAUUSD"
     timeframe: str = "5m"
     credentials: Credentials | None = None
+
+
+class LiveBarsRequest(BaseModel):
+    symbol: str = "XAUUSD"
+    timeframe: str = "5m"
+    bars: list[dict]
+    credentials: Credentials | None = None
+    source: str = "browser realtime stream"
+    volume_type: str = "tick volume"
 
 
 class ChatRequest(BaseModel):
@@ -45,32 +54,29 @@ def _event_risk_from_news(news: dict) -> float:
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "night-quant-terminal", "version": "0.5.0"}
+    return {"status": "ok", "service": "night-quant-terminal", "version": "0.6.0"}
 
 
-async def _analyse_one(symbol: str, timeframe: str, creds: dict):
-    market_data = await market.snapshot(symbol, timeframe, creds)
+async def _institutional_context(symbol: str, creds: dict):
     macro_data = await macro.snapshot(symbol, creds)
     intel = intelligence_snapshot(symbol)
     news = intel.get("news", {})
     cot = intel.get("cot", {})
     activity = activity_snapshot()
-
     base_macro = float(macro_data.get("macro_score", 0.0))
     base_inter = float(macro_data.get("intermarket_score", 0.0))
     news_score = float(news.get("score", 0.0))
     cot_score = float(cot.get("score", 0.0)) if symbol.upper() == "XAUUSD" else 0.0
-
     if symbol.upper() == "XAUUSD":
         macro_data["macro_score"] = _clamp(0.65 * base_macro + 0.20 * news_score + 0.15 * cot_score)
         macro_data["intermarket_score"] = _clamp(0.85 * base_inter + 0.15 * news_score)
     else:
         macro_data["macro_score"] = _clamp(0.80 * base_macro + 0.20 * news_score)
-
     event_risk = _event_risk_from_news(news)
-    payload = {**market_data, "macro": macro_data, "event_risk": event_risk}
-    result = analyse(symbol, timeframe, payload)
-    result["provider_errors"] = market_data.get("provider_errors", [])
+    return macro_data, news, cot, activity, event_risk, base_macro, base_inter, news_score, cot_score
+
+
+async def _decorate_result(symbol: str, result: dict, macro_data: dict, news: dict, cot: dict, activity: dict, event_risk: float, base_macro: float, base_inter: float, news_score: float, cot_score: float):
     result["macro_source"] = macro_data.get("macro_source")
     result["macro_details"] = macro_data.get("macro_details", {})
     result["news"] = news
@@ -87,10 +93,48 @@ async def _analyse_one(symbol: str, timeframe: str, creds: dict):
     return result
 
 
+async def _analyse_one(symbol: str, timeframe: str, creds: dict):
+    market_data = await market.snapshot(symbol, timeframe, creds)
+    macro_data, news, cot, activity, event_risk, base_macro, base_inter, news_score, cot_score = await _institutional_context(symbol, creds)
+    payload = {**market_data, "macro": macro_data, "event_risk": event_risk}
+    result = analyse(symbol, timeframe, payload)
+    result["provider_errors"] = market_data.get("provider_errors", [])
+    return await _decorate_result(symbol, result, macro_data, news, cot, activity, event_risk, base_macro, base_inter, news_score, cot_score)
+
+
 @app.post("/api/analyse")
 async def run_analysis(req: AnalysisRequest):
     creds = req.credentials.model_dump(exclude_none=True) if req.credentials else {}
     return await _analyse_one(req.symbol, req.timeframe, creds)
+
+
+@app.post("/api/bars")
+async def get_seed_bars(req: AnalysisRequest):
+    creds = req.credentials.model_dump(exclude_none=True) if req.credentials else {}
+    data = await market.snapshot(req.symbol, req.timeframe, creds)
+    return {
+        "symbol": req.symbol.upper(),
+        "timeframe": req.timeframe,
+        "bars": data.get("bars", []),
+        "source": data.get("source", "none"),
+        "volume_type": data.get("volume_type", "none"),
+        "provider_errors": data.get("provider_errors", []),
+    }
+
+
+@app.post("/api/analyse-bars")
+async def analyse_live_bars(req: LiveBarsRequest):
+    creds = req.credentials.model_dump(exclude_none=True) if req.credentials else {}
+    macro_data, news, cot, activity, event_risk, base_macro, base_inter, news_score, cot_score = await _institutional_context(req.symbol, creds)
+    result = analyse(req.symbol, req.timeframe, {
+        "bars": req.bars[-240:],
+        "source": req.source,
+        "volume_type": req.volume_type,
+        "macro": macro_data,
+        "event_risk": event_risk,
+    })
+    result["stream_realtime"] = True
+    return await _decorate_result(req.symbol, result, macro_data, news, cot, activity, event_risk, base_macro, base_inter, news_score, cot_score)
 
 
 @app.post("/api/analyse-mtf")
@@ -174,4 +218,4 @@ async def calendar():
 
 @app.get("/api/modules")
 def modules():
-    return {"modules": ["Live OHLCV Adapter","Exact MTF Quant","Volume/Flow","Regime","Probability/EV","FRED Macro","GDELT News Intelligence","CFTC COT Positioning","WTI/Brent/NatGas","Live AIS Shipping","Trade Readiness","Quant Chat","Report Engine"]}
+    return {"modules": ["Realtime Browser Tick Stream","Realtime Tick Candle Builder","Live OHLCV Adapter","Exact MTF Quant","Volume/Flow","Regime","Probability/EV","FRED Macro","GDELT News Intelligence","CFTC COT Positioning","WTI/Brent/NatGas","Live AIS Shipping","Trade Readiness","NIGHT AI","Report Engine"]}
