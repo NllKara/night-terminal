@@ -1,7 +1,10 @@
 import React,{useEffect,useRef,useState}from'react';
 
-const TD_MAP={XAUUSD:'XAU/USD',EURUSD:'EUR/USD',GBPUSD:'GBP/USD',USDJPY:'USD/JPY',NAS100:'NDX',US30:'DJI'};
+const US=new Set(['AAPL','MSFT','NVDA','AMZN','GOOGL','META','TSLA','AVGO','JPM','V','MA','LLY','WMT','XOM','COST','NFLX','AMD','CRM','ORCL','PLTR']);
+const ID=new Set(['BBCA','BBRI','BMRI','BBNI','TLKM','ASII','AMMN','DSSA','BYAN','GOTO','ADRO','ANTM','INCO','MDKA','ICBP','INDF','UNVR','KLBF','PGAS','CPIN']);
+const FIXED={XAUUSD:'XAU/USD',EURUSD:'EUR/USD',GBPUSD:'GBP/USD',USDJPY:'USD/JPY',NAS100:'NDX',US30:'DJI',SPX:'SPX',SP500:'SPX',NDX:'NDX',DJI:'DJI',RUT:'RUT',IHSG:'JKSE',LQ45:'JKLQ45'};
 const TF_MS={'1m':60000,'5m':300000,'15m':900000,'1h':3600000,'4h':14400000,'1D':86400000};
+function tdSymbol(symbol){const s=String(symbol||'').toUpperCase();if(FIXED[s])return FIXED[s];if(US.has(s))return s;if(ID.has(s))return s;return null}
 
 export default function LiveMarketStream({symbol,timeframe='5m',apiKey,credentials={},apiBase='',onPrice,onQuant}){
  const[status,setStatus]=useState('CONNECTING'),[price,setPrice]=useState(null),[last,setLast]=useState(null),[latency,setLatency]=useState(null),[barsReady,setBarsReady]=useState(0);
@@ -18,11 +21,8 @@ export default function LiveMarketStream({symbol,timeframe='5m',apiKey,credentia
     if(!alive||!Number.isFinite(p))return;
     const eventMs=ts?(Number(ts)>1e12?Number(ts):Number(ts)*1000):Date.now();
     const prev=priceRef.current;priceRef.current=p;setLast(prev);setPrice(p);setLatency(Math.max(0,Date.now()-eventMs));setStatus('LIVE');onPrice?.(p,eventMs);
-    // Reference/Execution price is overwritten immediately by the active symbol's live tick.
     onQuant?.({last_price:p,realtime_price:true,live_symbol:symbol,source,volume_type:volumeType});
     const bucket=Math.floor(eventMs/tfms)*tfms;const bars=barsRef.current;let b=bars[bars.length-1];
-    // Reject cross-instrument/stale seeds. If the historical tail is wildly different from the live quote,
-    // do not let it contaminate execution or quant outputs.
     if(b&&Number(b.close)>0&&Math.abs(p/Number(b.close)-1)>0.035){barsRef.current=[];bars.length=0;b=null;setBarsReady(0)}
     if(!b||Number(b.time)!==bucket){b={time:bucket,open:p,high:p,low:p,close:p,volume:Math.max(0,Number(qty)||1)};bars.push(b);if(bars.length>240)bars.shift()}
     else{b.high=Math.max(Number(b.high),p);b.low=Math.min(Number(b.low),p);b.close=p;b.volume=Number(b.volume||0)+Math.max(0,Number(qty)||1)}
@@ -36,10 +36,10 @@ export default function LiveMarketStream({symbol,timeframe='5m',apiKey,credentia
       ws.onopen=()=>alive&&setStatus('LIVE');
       ws.onmessage=e=>{try{const j=JSON.parse(e.data);ingest(Number(j.p),j.T,Number(j.q||0),'Binance realtime trade stream','exchange traded BTC volume')}catch{}};
       ws.onerror=()=>alive&&setStatus('STREAM ERROR');ws.onclose=()=>alive&&setStatus('OFFLINE');
-    }else if(apiKey&&TD_MAP[symbol]){
-      const ws=new WebSocket(`wss://ws.twelvedata.com/v1/quotes/price?apikey=${encodeURIComponent(apiKey)}`);wsRef.current=ws;
-      ws.onopen=()=>{setStatus('SUBSCRIBING');ws.send(JSON.stringify({action:'subscribe',params:{symbols:TD_MAP[symbol]}}));heartbeat=setInterval(()=>{try{ws.send(JSON.stringify({action:'heartbeat'}))}catch{}},10000)};
-      ws.onmessage=e=>{try{const j=JSON.parse(e.data);if(j.event==='price'&&j.symbol===TD_MAP[symbol])ingest(Number(j.price),j.timestamp,1,'Twelve Data realtime WebSocket','tick volume');else if(j.event==='subscribe-status'&&j.status==='error')setStatus('PLAN LIMIT')}catch{}};
+    }else if(apiKey&&tdSymbol(symbol)){
+      const sub=tdSymbol(symbol);const ws=new WebSocket(`wss://ws.twelvedata.com/v1/quotes/price?apikey=${encodeURIComponent(apiKey)}`);wsRef.current=ws;
+      ws.onopen=()=>{setStatus('SUBSCRIBING');ws.send(JSON.stringify({action:'subscribe',params:{symbols:sub}}));heartbeat=setInterval(()=>{try{ws.send(JSON.stringify({action:'heartbeat'}))}catch{}},10000)};
+      ws.onmessage=e=>{try{const j=JSON.parse(e.data);if(j.event==='price'&&String(j.symbol).toUpperCase()===String(sub).toUpperCase())ingest(Number(j.price),j.timestamp,1,'Twelve Data realtime WebSocket',ID.has(String(symbol).toUpperCase())?'exchange/provider activity':'trade/tick activity');else if(j.event==='subscribe-status'&&j.status==='error')setStatus('PLAN LIMIT / EOD')}catch{}};
       ws.onerror=()=>alive&&setStatus('STREAM ERROR');ws.onclose=()=>alive&&setStatus('OFFLINE');
     }else setStatus('CHART LIVE / ADD KEY');
    }catch{setStatus('STREAM ERROR')}
