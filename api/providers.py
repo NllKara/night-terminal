@@ -31,7 +31,10 @@ def _oanda_granularity(tf: str) -> str:
     return {"1m":"M1","5m":"M5","15m":"M15","1h":"H1","4h":"H4","1D":"D","1d":"D"}.get(tf,"M5")
 
 def _symbol_td(symbol: str) -> str:
-    return {"XAUUSD":"XAU/USD","EURUSD":"EUR/USD","GBPUSD":"GBP/USD","USDJPY":"USD/JPY","BTCUSD":"BTC/USD","NAS100":"NDX","US30":"DJI"}.get(symbol.upper(),symbol.upper())
+    return {
+        "XAUUSD":"XAU/USD","EURUSD":"EUR/USD","GBPUSD":"GBP/USD","USDJPY":"USD/JPY",
+        "BTCUSD":"BTC/USD","NAS100":"NDX","US30":"DJI"
+    }.get(symbol.upper(),symbol.upper())
 
 def _symbol_oanda(symbol: str) -> str:
     return {"XAUUSD":"XAU_USD","EURUSD":"EUR_USD","GBPUSD":"GBP_USD","USDJPY":"USD_JPY"}.get(symbol.upper(),symbol.upper())
@@ -45,10 +48,10 @@ class MarketProvider:
         credentials = credentials or {}; errors=[]
         sym=symbol.upper()
 
-        # IMPORTANT: XAUUSD must stay XAU/USD spot. Never substitute GC futures for execution/reference price.
-        # Twelve Data lists XAU/USD as a real-time Commodity Aggregate trial symbol; use it before broker fallbacks.
+        # Primary same-instrument source for FX, spot gold and indices: Twelve Data when configured.
+        # This keeps historical seed bars aligned with the browser realtime WebSocket symbols.
         td_key=credentials.get("twelve_key") or os.environ.get("TWELVE_DATA_API_KEY")
-        if td_key:
+        if td_key and sym in {"XAUUSD","EURUSD","GBPUSD","USDJPY","NAS100","US30"}:
             try:
                 params=urllib.parse.urlencode({"symbol":_symbol_td(symbol),"interval":_interval_map(timeframe),"outputsize":180,"apikey":td_key,"format":"JSON"})
                 data=_get_json(f"https://api.twelvedata.com/time_series?{params}")
@@ -57,10 +60,11 @@ class MarketProvider:
                 for r in reversed(data.get("values",[])):
                     bars.append({"time":r.get("datetime"),"open":float(r["open"]),"high":float(r["high"]),"low":float(r["low"]),"close":float(r["close"]),"volume":float(r.get("volume") or 0)})
                 if len(bars)>=30:
-                    vt="provider/tick volume" if sum(b["volume"] for b in bars[-20:])>0 else "tick volume built by live stream"
-                    return {"bars":bars,"source":f"Twelve Data {_symbol_td(symbol)} spot/market feed","volume_type":vt,"freshness":0.98,"is_proxy":False}
+                    vt="provider/tick volume" if sum(b["volume"] for b in bars[-20:])>0 else "tick volume built from realtime stream"
+                    return {"bars":bars,"source":f"Twelve Data {_symbol_td(symbol)}","volume_type":vt,"freshness":1.0,"is_proxy":False,"instrument":_symbol_td(symbol)}
             except Exception as e: errors.append(f"Twelve Data: {type(e).__name__}")
 
+        # Optional OANDA fallback only for the exact same FX/spot-metal instrument family.
         token=credentials.get("oanda_token") or os.environ.get("OANDA_TOKEN")
         if token and sym in {"XAUUSD","EURUSD","GBPUSD","USDJPY"}:
             try:
@@ -71,21 +75,21 @@ class MarketProvider:
                 for c in data.get("candles",[]):
                     m=c.get("mid") or {}
                     if m: bars.append({"time":c.get("time"),"open":float(m["o"]),"high":float(m["h"]),"low":float(m["l"]),"close":float(m["c"]),"volume":float(c.get("volume",0))})
-                if len(bars)>=30:return {"bars":bars,"source":"OANDA XAU/FX spot feed","volume_type":"tick volume (price-update count)","freshness":1.0,"is_proxy":False}
+                if len(bars)>=30:return {"bars":bars,"source":f"OANDA {inst}","volume_type":"tick volume (price-update count)","freshness":1.0,"is_proxy":False,"instrument":inst}
             except Exception as e: errors.append(f"OANDA: {type(e).__name__}")
 
+        # BTC has a genuinely realtime public exchange feed.
         bsym=_binance_symbol(symbol)
         if bsym:
             try:
                 interval={"1m":"1m","5m":"5m","15m":"15m","1h":"1h","4h":"4h","1D":"1d","1d":"1d"}.get(timeframe,"5m")
                 rows=_get_json(f"https://api.binance.com/api/v3/klines?symbol={bsym}&interval={interval}&limit=180")
                 bars=[{"time":r[0],"open":float(r[1]),"high":float(r[2]),"low":float(r[3]),"close":float(r[4]),"volume":float(r[5])} for r in rows]
-                if len(bars)>=30:return {"bars":bars,"source":"Binance public market data","volume_type":"exchange-traded base-asset volume","freshness":1.0,"is_proxy":False}
+                if len(bars)>=30:return {"bars":bars,"source":"Binance BTCUSDT realtime/public","volume_type":"exchange-traded base-asset volume","freshness":1.0,"is_proxy":False,"instrument":"BTCUSDT"}
             except Exception as e: errors.append(f"Binance: {type(e).__name__}")
 
-        # Do NOT return a different instrument as a fake reference price. If XAU spot is unavailable,
-        # the terminal must show NO LIVE SPOT DATA rather than a GC futures price with basis/delay.
-        return {"bars":[],"source":"none - live spot feed required","volume_type":"none","freshness":0.0,"provider_errors":errors,"is_proxy":False}
+        # Never substitute a different instrument (e.g. GC futures for XAUUSD or a stale proxy).
+        return {"bars":[],"source":"none","volume_type":"none","freshness":0.0,"provider_errors":errors,"is_proxy":False,"instrument":_symbol_td(symbol)}
 
 
 class MacroProvider:
