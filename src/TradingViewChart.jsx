@@ -1,3 +1,11 @@
 import React,{useEffect,useRef}from'react';
-const MAP={XAUUSD:'OANDA:XAUUSD',EURUSD:'OANDA:EURUSD',GBPUSD:'OANDA:GBPUSD',USDJPY:'OANDA:USDJPY',BTCUSD:'COINBASE:BTCUSD',NAS100:'OANDA:NAS100USD',US30:'OANDA:US30USD'};
+const MAP={
+ XAUUSD:'OANDA:XAUUSD',
+ EURUSD:'OANDA:EURUSD',
+ GBPUSD:'OANDA:GBPUSD',
+ USDJPY:'OANDA:USDJPY',
+ BTCUSD:'BINANCE:BTCUSDT',
+ NAS100:'NASDAQ:NDX',
+ US30:'DJ:DJI'
+};
 export default function TradingViewChart({symbol='XAUUSD',interval='5'}){const ref=useRef(null);useEffect(()=>{if(!ref.current)return;ref.current.innerHTML='';const s=document.createElement('script');s.src='https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';s.type='text/javascript';s.async=true;s.innerHTML=JSON.stringify({autosize:true,symbol:MAP[symbol]||symbol,interval,timezone:'Asia/Jakarta',theme:'dark',style:'1',locale:'en',allow_symbol_change:false,calendar:false,support_host:'https://www.tradingview.com',hide_top_toolbar:false,hide_side_toolbar:false,withdateranges:true,save_image:false,details:true,hotlist:true});ref.current.appendChild(s)},[symbol,interval]);return <div className="tv-wrap"><div className="tradingview-widget-container" ref={ref} style={{height:'100%',width:'100%'}}><div className="tradingview-widget-container__widget" style={{height:'100%',width:'100%'}}/></div></div>}
