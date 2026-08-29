@@ -5,34 +5,23 @@ from pydantic import BaseModel
 from api.engine import analyse
 from api.providers import MarketProvider, MacroProvider
 from api.intelligence import intelligence_snapshot, fetch_news, fetch_cot_gold
-from api.market_activity import activity_snapshot, oil_snapshot, shipping_snapshot
-from api.equity_data import equity_snapshot, equity_bars
+from api.market_activity import activity_snapshot, oil_snapshot, shipping_snapshot, shipping_exposure
+from api.equity_data import equity_snapshot, equity_bars, search_equities
 from api.luna import ask_luna
 
-app = FastAPI(title="NIGHT Quant Terminal API", version="0.7.2")
-market = MarketProvider()
-macro = MacroProvider()
-
+app=FastAPI(title="NIGHT Quant Terminal API",version="0.8.0");market=MarketProvider();macro=MacroProvider()
 class Credentials(BaseModel):
-    twelve_key: str | None = None
-    fred_key: str | None = None
-    gemini_key: str | None = None
-    openrouter_key: str | None = None
-    oanda_token: str | None = None
-    oanda_account: str | None = None
-
+    twelve_key:str|None=None;fred_key:str|None=None;gemini_key:str|None=None;openrouter_key:str|None=None;oanda_token:str|None=None;oanda_account:str|None=None
 class AnalysisRequest(BaseModel):
-    symbol: str = "XAUUSD"
-    timeframe: str = "5m"
-    credentials: Credentials | None = None
+    symbol:str="XAUUSD";timeframe:str="5m";credentials:Credentials|None=None
 class LiveBarsRequest(BaseModel):
-    symbol: str = "XAUUSD"; timeframe: str = "5m"; bars: list[dict]; credentials: Credentials | None = None; source: str = "browser realtime stream"; volume_type: str = "tick volume"
+    symbol:str="XAUUSD";timeframe:str="5m";bars:list[dict];credentials:Credentials|None=None;source:str="browser realtime stream";volume_type:str="tick volume"
 class ChatRequest(BaseModel):
-    message: str; analysis: dict; credentials: Credentials | None = None
+    message:str;analysis:dict;credentials:Credentials|None=None
 class EquityRequest(BaseModel):
-    symbol: str; credentials: Credentials | None = None
+    symbol:str;market:str|None=None;credentials:Credentials|None=None
 class LunaRequest(BaseModel):
-    message: str; context: dict | None = None; credentials: Credentials | None = None
+    message:str;context:dict|None=None;credentials:Credentials|None=None
 
 def _clamp(x:float,lo:float=-1.0,hi:float=1.0)->float:return max(lo,min(hi,x))
 def _event_risk_from_news(news:dict)->float:
@@ -41,7 +30,7 @@ def _event_risk_from_news(news:dict)->float:
         t=(a.get("title") or "").lower();hits+=sum(1 for k in keys if k in t)
     return min(86.0,18.0+hits*4.0)
 @app.get("/api/health")
-def health():return {"status":"ok","service":"night-quant-terminal","version":"0.7.2"}
+def health():return {"status":"ok","service":"night-quant-terminal","version":"0.8.0"}
 
 async def _institutional_context(symbol:str,creds:dict):
     macro_data=await macro.snapshot(symbol,creds);intel=intelligence_snapshot(symbol);news=intel.get("news",{});cot=intel.get("cot",{});activity=activity_snapshot();base_macro=float(macro_data.get("macro_score",0.0));base_inter=float(macro_data.get("intermarket_score",0.0));news_score=float(news.get("score",0.0));cot_score=float(cot.get("score",0.0)) if symbol.upper()=="XAUUSD" else 0.0
@@ -68,14 +57,17 @@ async def run_mtf(req:AnalysisRequest):
     if not valid:return {"symbol":req.symbol.upper(),"valid":False,"timeframes":results}
     w={"1m":.06,"5m":.10,"15m":.14,"1h":.22,"4h":.26,"1D":.22};p_up=sum(results[tf].get("probability_up",50)*w[tf] for tf in frames if results[tf].get("valid"))/(sum(w[tf] for tf in frames if results[tf].get("valid")) or 1);agreement=sum(1 for v in valid if (v.get("probability_up",50)>=55)==(p_up>=55))/len(valid);action="LONG" if p_up>=58 and agreement>=.60 else "SHORT" if p_up<=42 and agreement>=.60 else "WAIT";return {"symbol":req.symbol.upper(),"valid":True,"action":action,"probability_up":round(p_up,2),"probability_down":round(100-p_up,2),"agreement":round(agreement*100,2),"average_readiness":round(sum(v.get("trade_readiness",0) for v in valid)/len(valid),2),"timeframes":results}
 
+@app.get("/api/equity/search")
+def equity_search(q:str,limit:int=40):return {"query":q,"results":search_equities(q,max(1,min(limit,60)))}
 @app.post("/api/equity")
 def equity(req:EquityRequest):
-    creds=req.credentials.model_dump(exclude_none=True) if req.credentials else {};return equity_snapshot(req.symbol,creds.get("twelve_key"))
+    creds=req.credentials.model_dump(exclude_none=True) if req.credentials else {};snap=equity_snapshot(req.symbol,creds.get("twelve_key"),req.market);bars=snap.get("bars",[]);sig=analyse(req.symbol,"5m",{"bars":bars,"source":snap.get("price_source","equity feed"),"volume_type":"exchange/provider volume","freshness":1.0 if "LIVE" in snap.get("freshness","") else .75,"macro":{"macro_score":0.0,"intermarket_score":0.0,"freshness":.7},"event_risk":20.0})
+    profile=((snap.get("fundamentals") or {}).get("profile") or {});ship=shipping_snapshot(350);snap["signal"]={"action":sig.get("action"),"bias":sig.get("bias"),"probability_up":sig.get("probability_up"),"probability_down":sig.get("probability_down"),"confidence":sig.get("confidence"),"readiness":sig.get("trade_readiness"),"regime":sig.get("regime")};snap["shipping_exposure"]=shipping_exposure(req.symbol,profile,ship);return snap
 @app.post("/api/equity-mtf")
 def equity_mtf(req:EquityRequest):
     creds=req.credentials.model_dump(exclude_none=True) if req.credentials else {};frames=["1m","5m","15m","1h","4h","1D"];out={}
     for tf in frames:
-        d=equity_bars(req.symbol,creds.get("twelve_key"),tf,180);r=analyse(req.symbol,tf,{"bars":d.get("bars",[]),"source":d.get("source","none"),"volume_type":"exchange/provider volume","freshness":1.0 if "LIVE" in d.get("freshness","") else .75,"macro":{"macro_score":0.0,"intermarket_score":0.0,"freshness":.7},"event_risk":20.0});out[tf]={**r,"freshness":d.get("freshness"),"source":d.get("source")}
+        d=equity_bars(req.symbol,creds.get("twelve_key"),tf,180,req.market);r=analyse(req.symbol,tf,{"bars":d.get("bars",[]),"source":d.get("source","none"),"volume_type":"exchange/provider volume","freshness":1.0 if "LIVE" in d.get("freshness","") else .75,"macro":{"macro_score":0.0,"intermarket_score":0.0,"freshness":.7},"event_risk":20.0});out[tf]={**r,"freshness":d.get("freshness"),"source":d.get("source")}
     valid=[v for v in out.values() if v.get("valid")]
     if not valid:return {"symbol":req.symbol.upper(),"valid":False,"timeframes":out}
     w={"1m":.06,"5m":.10,"15m":.14,"1h":.22,"4h":.26,"1D":.22};p=sum(out[tf].get("probability_up",50)*w[tf] for tf in frames if out[tf].get("valid"))/(sum(w[tf] for tf in frames if out[tf].get("valid")) or 1);agree=sum(1 for v in valid if (v.get("probability_up",50)>=55)==(p>=55))/len(valid);act="LONG" if p>=58 and agree>=.60 else "SHORT" if p<=42 and agree>=.60 else "WAIT";return {"symbol":req.symbol.upper(),"valid":True,"action":act,"probability_up":round(p,2),"probability_down":round(100-p,2),"agreement":round(agree*100,2),"timeframes":out}
@@ -92,11 +84,13 @@ def live_activity():return activity_snapshot()
 @app.get("/api/oil")
 def live_oil():return oil_snapshot()
 @app.get("/api/shipping")
-def live_shipping():return shipping_snapshot()
+def live_shipping(limit:int=700):return shipping_snapshot(max(50,min(limit,1200)))
+@app.get("/api/shipping/exposure/{symbol}")
+def live_shipping_exposure(symbol:str):return shipping_exposure(symbol,{},shipping_snapshot(350))
 @app.post("/api/chat")
 def quant_chat(req:ChatRequest):
     creds=req.credentials.model_dump(exclude_none=True) if req.credentials else {};return ask_luna(req.message,req.analysis or {},creds)
 @app.get("/api/calendar")
 async def calendar():return {"events":await macro.calendar()}
 @app.get("/api/modules")
-def modules():return {"modules":["Realtime Browser Tick Stream","Realtime Tick Candle Builder","Live OHLCV Adapter","Equity Market Data","Equity MTF Direction","SEC EDGAR Fundamentals","Twelve Data Global Fundamentals","Exact MTF Quant","Volume/Flow","Regime","Probability/EV","FRED Macro","GDELT News Intelligence","CFTC COT Positioning","WTI/Brent/NatGas","Live AIS Shipping","Trade Readiness","Luna AI","Report Engine"]}
+def modules():return {"modules":["Searchable US/IDX Equity Universe","Realtime/Latest Equity Market Data","Equity Signals","Equity MTF Direction","Stock Shipping Exposure","Global AIS Shipping Analytics","SEC EDGAR Fundamentals","Twelve Data Global Fundamentals","Exact MTF Quant","Volume/Flow","Regime","Probability/EV","FRED Macro","GDELT News Intelligence","CFTC COT Positioning","WTI/Brent/NatGas","Trade Readiness","Luna AI","Report Engine"]}
