@@ -3,7 +3,7 @@
 Personal institutional quant market intelligence terminal with live charting, realtime streams, multi-asset analysis, shipping intelligence, global indices, US/Indonesia equity desks, geopolitical/news context, AI screening and report generation.
 
 ## Production trigger
-Latest production bundle includes the newest NIGHT multi-asset, equity, shipping, geopolitical, realtime-price and institutional workspace changes.
+Latest production bundle includes the NDR-style institutional layout, dynamic stock universe, ranked signals, multi-timeframe direction, fundamentals, Luna AI, global AIS shipping analytics, stock shipping/supply-chain exposure, geopolitical/news intelligence, realtime-price handling and report workflows.
 
 ## What is live now
 - TradingView interactive chart
@@ -12,7 +12,10 @@ Latest production bundle includes the newest NIGHT multi-asset, equity, shipping
 - XAU/FX/indices realtime stream through Twelve Data when the key/plan permits the symbol
 - Tick-to-candle realtime quant recalculation
 - Multi-timeframe quant engine
-- Live shipping/AIS map
+- Dynamic US / Indonesia equity search
+- Equity signals and ranked opportunities
+- Live shipping/AIS map + global shipping analytics
+- Stock shipping / supply-chain exposure
 - WTI, Brent and Natural Gas board
 - Live global news activity
 - CFTC positioning
@@ -23,7 +26,7 @@ Latest production bundle includes the newest NIGHT multi-asset, equity, shipping
 - AI Stock Screener workspace
 - Fundamental Mind Map workspace
 - Geopolitical and Supply Chain desk
-- NIGHT AI
+- Luna AI
 - Report Engine
 
 ## Quant engine
