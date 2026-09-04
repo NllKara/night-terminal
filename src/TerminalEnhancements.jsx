@@ -20,7 +20,6 @@ function compactContext(c={}){
   ranked:(c.ranked||[]).slice(0,5).map(x=>({symbol:x.symbol,action:x.action,score:x.score,agreement:x.agreement,probability_up:x.probability_up,average_readiness:x.average_readiness})),
   news:{source:n.source,score:n.score,count:n.count,articles:(n.articles||[]).slice(0,10)},
   activity:{oil:a.oil,shipping:{count:s.count,analytics:s.analytics},news_count:a.news_count,event_risk:a.event_risk}}
- }
 }
 
 async function api(path,opts){const r=await fetch(API+path,opts);const text=await r.text();let j;try{j=text?JSON.parse(text):{}}catch{j={detail:text||`HTTP ${r.status}`}}if(!r.ok)throw new Error(j.detail||j.error||`API ${r.status}`);return j}
