@@ -1,39 +1,73 @@
 import React,{useEffect,useMemo,useState}from'react';
 import{createPortal}from'react-dom';
-import{Newspaper,RefreshCw}from'lucide-react';
+import{RefreshCw}from'lucide-react';
 
 const API=import.meta.env.VITE_API_URL||'';
 const FX_UNIVERSE=['XAUUSD','XAGUSD','EURUSD','GBPUSD','USDJPY','USDCHF','USDCAD','AUDUSD','NZDUSD','EURGBP','EURJPY','EURCHF','EURCAD','EURAUD','EURNZD','GBPJPY','GBPCHF','GBPCAD','GBPAUD','GBPNZD','AUDJPY','AUDCHF','AUDCAD','AUDNZD','NZDJPY','NZDCHF','NZDCAD','CADJPY','CADCHF','CHFJPY','BTCUSD','ETHUSD','NAS100','US30','SPX500'];
 const NEWS_ASSETS=['XAUUSD','EURUSD','GBPUSD','USDJPY','AUDUSD','USDCAD','USDCHF','NAS100','SPX500','US30','BTCUSD'];
+const EVENTS=['NFP','CPI','CORE CPI','FOMC','POWELL','PCE','GDP','CLAIMS','RETAIL SALES','PPI','GEOPOLITICS'];
 const credsLoad=()=>{try{return JSON.parse(localStorage.getItem('night_quant_creds')||'{}')}catch{return{}}};
 const fmt=(v,d=1)=>v==null||Number.isNaN(Number(v))?'—':Number(v).toFixed(d);
 
-async function post(path,body){const r=await fetch(API+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const j=await r.json();if(!r.ok)throw new Error(j.detail||`API ${r.status}`);return j}
-async function get(path){const r=await fetch(API+path);const j=await r.json();if(!r.ok)throw new Error(j.detail||`API ${r.status}`);return j}
+function compactContext(c={}){
+ const n=c.news||{},a=c.activity||{},s=a.shipping||{};
+ return {symbol:c.symbol,market:c.market,tab:c.tab,timeframe:c.timeframe,
+  analysis:c.analysis?{action:c.analysis.action,bias:c.analysis.bias,probability_up:c.analysis.probability_up,trade_readiness:c.analysis.trade_readiness,regime:c.analysis.regime,macro_source:c.analysis.macro_source,macro_details:c.analysis.macro_details,institutional_factors:c.analysis.institutional_factors,event_risk:c.analysis.event_risk}:null,
+  mtf:c.mtf?{action:c.mtf.action,probability_up:c.mtf.probability_up,agreement:c.mtf.agreement,average_readiness:c.mtf.average_readiness,timeframes:c.mtf.timeframes}:null,
+  equity:c.equity?{symbol:c.equity.symbol,price:c.equity.price,freshness:c.equity.freshness,signal:c.equity.signal,quote:c.equity.quote,sec:c.equity.sec,shipping_exposure:c.equity.shipping_exposure}:null,
+  equityMtf:c.equityMtf?{action:c.equityMtf.action,probability_up:c.equityMtf.probability_up,agreement:c.equityMtf.agreement,timeframes:c.equityMtf.timeframes}:null,
+  ranked:(c.ranked||[]).slice(0,5).map(x=>({symbol:x.symbol,action:x.action,score:x.score,agreement:x.agreement,probability_up:x.probability_up,average_readiness:x.average_readiness})),
+  news:{source:n.source,score:n.score,count:n.count,articles:(n.articles||[]).slice(0,10)},
+  activity:{oil:a.oil,shipping:{count:s.count,analytics:s.analytics},news_count:a.news_count,event_risk:a.event_risk}}
+}
+
+async function api(path,opts){
+ const r=await fetch(API+path,opts);const text=await r.text();let j;
+ try{j=text?JSON.parse(text):{}}catch{j={detail:text||`HTTP ${r.status}`}}
+ if(!r.ok)throw new Error(j.detail||j.error||`API ${r.status}`);return j
+}
+async function post(path,body){return api(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})}
+async function get(path){return api(path)}
 
 export default function TerminalEnhancements(){
- const[open,setOpen]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[rows,setRows]=useState([]),[ai,setAi]=useState('');
- const creds=useMemo(credsLoad,[open]);
+ const[mode,setMode]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[rows,setRows]=useState([]),[ai,setAi]=useState(''),[event,setEvent]=useState('NFP'),[eventData,setEventData]=useState(null);
+ const creds=useMemo(credsLoad,[mode]);
  useEffect(()=>{
-  const apply=()=>{
-   const sel=document.querySelector('.prodToolbar select');
-   if(sel){const have=new Set([...sel.options].map(o=>o.value));FX_UNIVERSE.forEach(s=>{if(!have.has(s)){const o=document.createElement('option');o.value=s;o.textContent=s;sel.appendChild(o)}})}
-   const aside=document.querySelector('.prodApp aside');
-   if(aside&&!aside.querySelector('[data-news-prediction]')){const b=document.createElement('button');b.dataset.newsPrediction='1';b.innerHTML='<span style="font-size:16px">◈</span><span>News Prediction</span>';b.onclick=()=>setOpen(true);aside.appendChild(b)}
-   const gem=document.querySelector('.prodKeys input[placeholder*="Gemini"]');if(gem)gem.style.display='none';
-   document.querySelectorAll('.lunaHead p').forEach(p=>{if(p.textContent.includes('Gemini/OpenRouter'))p.textContent='AI market intelligence using OpenRouter + NIGHT terminal context.'});
+  const nativeFetch=window.fetch.bind(window);
+  window.fetch=async(input,init={})=>{
+   let nextInit=init;const url=typeof input==='string'?input:(input?.url||'');
+   if(url.includes('/api/luna')&&init?.body){try{const b=JSON.parse(init.body);if(b.context)b.context=compactContext(b.context);nextInit={...init,body:JSON.stringify(b)}}catch{}}
+   const r=await nativeFetch(input,nextInit);const ct=r.headers.get('content-type')||'';
+   if(url.includes('/api/')&&!ct.includes('application/json')){const text=await r.clone().text();return new Response(JSON.stringify({detail:text||`HTTP ${r.status}`}),{status:r.status,headers:{'Content-Type':'application/json'}})}
+   return r
   };
-  apply();const mo=new MutationObserver(apply);mo.observe(document.body,{childList:true,subtree:true});return()=>mo.disconnect();
+  const apply=()=>{
+   const sel=document.querySelector('.prodToolbar select');if(sel){const have=new Set([...sel.options].map(o=>o.value));FX_UNIVERSE.forEach(s=>{if(!have.has(s)){const o=document.createElement('option');o.value=s;o.textContent=s;sel.appendChild(o)}})}
+   const aside=document.querySelector('.prodApp aside');
+   if(aside&&!aside.querySelector('[data-news-prediction]')){const b=document.createElement('button');b.dataset.newsPrediction='1';b.innerHTML='<span style="font-size:16px">◈</span><span>News Prediction</span>';b.onclick=()=>setMode('market');aside.appendChild(b)}
+   if(aside&&!aside.querySelector('[data-news-event-analysis]')){const b=document.createElement('button');b.dataset.newsEventAnalysis='1';b.innerHTML='<span style="font-size:16px">◇</span><span>News Prediction Analysis</span>';b.onclick=()=>setMode('event');aside.appendChild(b)}
+   const gem=document.querySelector('.prodKeys input[placeholder*="Gemini"]');if(gem)gem.style.display='none';
+   document.querySelectorAll('.lunaHead p').forEach(p=>p.textContent='AI market intelligence using OpenRouter + compact NIGHT terminal context.');
+  };
+  apply();const mo=new MutationObserver(apply);mo.observe(document.body,{childList:true,subtree:true});return()=>{mo.disconnect();window.fetch=nativeFetch}
  },[]);
- async function run(){setBusy(true);setError('');setAi('');try{
+
+ async function runMarket(){setBusy(true);setError('');setAi('');try{
    const baseNews=await Promise.all(NEWS_ASSETS.map(async s=>{try{return[s,await get(`/api/news/${s}`)]}catch{return[s,{articles:[],count:0}]}}));
    const mtfs=await Promise.all(NEWS_ASSETS.map(async s=>{try{return[s,await post('/api/analyse-mtf',{symbol:s,timeframe:'15m',credentials:creds})]}catch{return[s,{valid:false}]}}));
    const newsMap=Object.fromEntries(baseNews),mtfMap=Object.fromEntries(mtfs);
-   const built=NEWS_ASSETS.map(s=>{const n=newsMap[s]||{},m=mtfMap[s]||{},score=Number(n.score||n.sentiment_score||0),impact=Number(n.impact_score||0),p=Number(m.probability_up||50);let newsDir=score>.08?'BULLISH':score<-.08?'BEARISH':'NEUTRAL';let tech=m.action==='LONG'?'BULLISH':m.action==='SHORT'?'BEARISH':'NEUTRAL';let aligned=newsDir==='NEUTRAL'||tech==='NEUTRAL'||newsDir===tech;let combined=aligned?(Math.abs(score)*35+Math.abs(p-50)*1.3+Number(m.agreement||0)*.35):(Math.abs(p-50)*.7+Number(m.agreement||0)*.2);let confidence=Math.max(20,Math.min(95,Math.round(combined)));let direction=newsDir==='NEUTRAL'?tech:aligned?newsDir:'MIXED';return{symbol:s,direction,newsDir,tech,confidence,impact,headlines:(n.articles||[]).slice(0,4),p,agreement:m.agreement||0,readiness:m.average_readiness||0,valid:m.valid}});
+   const built=NEWS_ASSETS.map(s=>{const n=newsMap[s]||{},m=mtfMap[s]||{},score=Number(n.score||0),p=Number(m.probability_up||50);let newsDir=score>.08?'BULLISH':score<-.08?'BEARISH':'NEUTRAL';let tech=m.action==='LONG'?'BULLISH':m.action==='SHORT'?'BEARISH':'NEUTRAL';let aligned=newsDir==='NEUTRAL'||tech==='NEUTRAL'||newsDir===tech;let evidence=Math.min(95,25+(n.count||0)*2+Math.abs(score)*35);let model=Math.min(95,Math.abs(p-50)*1.3+Number(m.agreement||0)*.45+Number(m.average_readiness||0)*.25);let confidence=Math.round(evidence*.45+model*.55);let direction=newsDir==='NEUTRAL'?tech:aligned?newsDir:'MIXED';return{symbol:s,direction,newsDir,tech,confidence,evidence,headlines:(n.articles||[]).slice(0,4),p,agreement:m.agreement||0,readiness:m.average_readiness||0,source:n.source||'—'}});
    setRows(built.sort((a,b)=>b.confidence-a.confidence));
-   if(creds.openrouter_key){const context={generated_at:new Date().toISOString(),assets:built,headlines:Object.fromEntries(NEWS_ASSETS.map(s=>[s,(newsMap[s]?.articles||[]).slice(0,6)]))};const prompt='Create a concise institutional NEWS PREDICTION brief. For each highest-conviction asset explain expected directional impact, why, conflicting evidence, what would invalidate the view, and whether the news view aligns with technical MTF. Do not invent facts or guarantee outcomes. Prioritize actionable event transmission across USD, yields, gold, FX and US indices.';const j=await post('/api/luna',{message:prompt,context,credentials:creds});setAi(j.answer||'No AI response')}
+   if(creds.openrouter_key){const context={assets:built.slice(0,7),headlines:Object.fromEntries(NEWS_ASSETS.map(s=>[s,(newsMap[s]?.articles||[]).slice(0,4)]))};const j=await post('/api/luna',{message:'Analyze the current released news in this context. Rank the strongest asset impacts, explain transmission through USD/yields/risk, conflicting evidence, invalidation, and distinguish actual released information from expectations. Include a confidence percentage for each conclusion; call it evidence confidence, not certainty.',context,credentials:creds});setAi(j.answer||'No AI response')}
   }catch(e){setError(e.message)}finally{setBusy(false)}}
- useEffect(()=>{if(open&&!rows.length)run()},[open]);
- if(!open)return null;
- return createPortal(<div className="newsPredictionOverlay"><div className="newsPredShell"><div className="newsPredHead"><div><small>NIGHT INTELLIGENCE</small><h1>NEWS PREDICTION & ANALYSIS</h1><p>Live headlines + current MTF technical state. Prediction is probabilistic, not a guarantee.</p></div><div><button onClick={run}><RefreshCw size={14}/>{busy?' ANALYZING…':' REFRESH'}</button><button onClick={()=>setOpen(false)}>CLOSE</button></div></div>{error&&<div className="prodError">{error}</div>}<div className="newsPredGrid">{rows.map((r,i)=><section key={r.symbol} className="newsPredCard"><div className="newsPredRank">#{i+1} NEWS OPPORTUNITY <b>{r.direction}</b></div><h2>{r.symbol}<strong>{r.confidence}%</strong></h2><div className="decisionGrid"><div><span>NEWS BIAS</span><b>{r.newsDir}</b></div><div><span>TECH MTF</span><b>{r.tech}</b></div><div><span>P↑</span><b>{fmt(r.p)}%</b></div><div><span>AGREEMENT</span><b>{fmt(r.agreement)}%</b></div><div><span>READINESS</span><b>{fmt(r.readiness)}%</b></div><div><span>IMPACT SCORE</span><b>{fmt(r.impact,2)}</b></div></div><div className="headlineStack">{r.headlines.map((h,j)=><article key={j}><b>{h.title||'Untitled headline'}</b><span>{h.source||h.domain||''}</span></article>)}</div></section>)}</div><section className="newsAiBrief"><h3>OPENROUTER AI — NEWS TRANSMISSION BRIEF</h3><pre>{ai|| (creds.openrouter_key?'Generating…':'Add OpenRouter key in Data Keys for AI narrative. Quant/news table works without it.')}</pre></section></div></div>,document.body)
+
+ async function runEvent(){setBusy(true);setError('');setAi('');try{
+   const d=await get(`/api/news-event?event=${encodeURIComponent(event)}&limit=35`);setEventData(d);
+   if(creds.openrouter_key){const context={event:d.event,source:d.source,hawkish_pct:d.hawkish_pct,dovish_pct:d.dovish_pct,neutral_pct:d.neutral_pct,evidence_confidence_pct:d.evidence_confidence_pct,headlines:(d.articles||[]).slice(0,12)};const q=`Analyze ${event} using ONLY the released/live headlines supplied. Explain whether the evidence is hawkish, dovish, or neutral; likely USD, XAUUSD, US yields, NAS100 and SPX500 impact; what is already known versus still expected; conflicting evidence; and invalidation. Use the supplied percentages as evidence scores, not guaranteed truth.`;const j=await post('/api/luna',{message:q,context,credentials:creds});setAi(j.answer||'No AI response')}
+  }catch(e){setError(e.message)}finally{setBusy(false)}}
+ useEffect(()=>{if(mode==='market'&&!rows.length)runMarket();if(mode==='event'&&!eventData)runEvent()},[mode]);
+ if(!mode)return null;
+ const close=()=>setMode(null);
+ if(mode==='event')return createPortal(<div className="newsPredictionOverlay"><div className="newsPredShell"><div className="newsPredHead"><div><small>NIGHT EVENT INTELLIGENCE</small><h1>NEWS PREDICTION ANALYSIS</h1><p>Released headlines → Hawkish / Dovish / Neutral evidence → market transmission.</p></div><div><select className="eventSelect" value={event} onChange={e=>setEvent(e.target.value)}>{EVENTS.map(x=><option key={x}>{x}</option>)}</select><button onClick={runEvent}><RefreshCw size={14}/>{busy?' ANALYZING…':' ANALYZE'}</button><button onClick={close}>CLOSE</button></div></div>{error&&<div className="prodError">{error}</div>}{eventData&&<><div className="policyMeter"><div><span>HAWKISH</span><b>{fmt(eventData.hawkish_pct)}%</b><i><em style={{width:`${eventData.hawkish_pct}%`}}/></i></div><div><span>DOVISH</span><b>{fmt(eventData.dovish_pct)}%</b><i><em style={{width:`${eventData.dovish_pct}%`}}/></i></div><div><span>NEUTRAL</span><b>{fmt(eventData.neutral_pct)}%</b><i><em style={{width:`${eventData.neutral_pct}%`}}/></i></div><div><span>EVIDENCE CONFIDENCE</span><b>{fmt(eventData.evidence_confidence_pct)}%</b><i><em style={{width:`${eventData.evidence_confidence_pct}%`}}/></i></div></div><section className="newsAiBrief"><h3>LIVE RELEASE EVIDENCE · {eventData.source}</h3><div className="headlineStack">{(eventData.articles||[]).slice(0,15).map((h,i)=><article key={i}><b>{h.title}</b><span>{h.domain||''} · policy score {fmt(h.policy_score,2)}</span></article>)}</div></section></>}<section className="newsAiBrief"><h3>LUNA / OPENROUTER — EVENT ANALYSIS</h3><pre>{ai||(creds.openrouter_key?'Analyzing…':'Add OpenRouter key for AI narrative. Percentages/headlines work without AI.')}</pre></section></div></div>,document.body);
+ return createPortal(<div className="newsPredictionOverlay"><div className="newsPredShell"><div className="newsPredHead"><div><small>NIGHT INTELLIGENCE</small><h1>NEWS PREDICTION</h1><p>Live headlines + current MTF technical state. Confidence is evidence strength, not guaranteed accuracy.</p></div><div><button onClick={runMarket}><RefreshCw size={14}/>{busy?' ANALYZING…':' REFRESH'}</button><button onClick={close}>CLOSE</button></div></div>{error&&<div className="prodError">{error}</div>}<div className="newsPredGrid">{rows.map((r,i)=><section key={r.symbol} className="newsPredCard"><div className="newsPredRank">#{i+1} NEWS OPPORTUNITY <b>{r.direction}</b></div><h2>{r.symbol}<strong>{r.confidence}%</strong></h2><div className="decisionGrid"><div><span>NEWS BIAS</span><b>{r.newsDir}</b></div><div><span>TECH MTF</span><b>{r.tech}</b></div><div><span>P↑</span><b>{fmt(r.p)}%</b></div><div><span>AGREEMENT</span><b>{fmt(r.agreement)}%</b></div><div><span>READINESS</span><b>{fmt(r.readiness)}%</b></div><div><span>EVIDENCE CONF.</span><b>{fmt(r.evidence)}%</b></div></div><div className="headlineStack">{r.headlines.map((h,j)=><article key={j}><b>{h.title||'Untitled headline'}</b><span>{h.domain||''} · {r.source}</span></article>)}</div></section>)}</div><section className="newsAiBrief"><h3>OPENROUTER AI — RELEASED NEWS TRANSMISSION BRIEF</h3><pre>{ai||(creds.openrouter_key?'Generating…':'Add OpenRouter key for AI narrative.')}</pre></section></div></div>,document.body)
 }
