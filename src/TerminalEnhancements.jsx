@@ -1,6 +1,7 @@
 import React,{useEffect,useMemo,useState}from'react';
 import{createPortal}from'react-dom';
 import{RefreshCw}from'lucide-react';
+import OrderflowDesk from'./OrderflowDesk';
 
 const API=import.meta.env.VITE_API_URL||'';
 const FX_UNIVERSE=['XAUUSD','XAGUSD','EURUSD','GBPUSD','USDJPY','USDCHF','USDCAD','AUDUSD','NZDUSD','EURGBP','EURJPY','EURCHF','EURCAD','EURAUD','EURNZD','GBPJPY','GBPCHF','GBPCAD','GBPAUD','GBPNZD','AUDJPY','AUDCHF','AUDCAD','AUDNZD','NZDJPY','NZDCHF','NZDCAD','CADJPY','CADCHF','CHFJPY','BTCUSD','ETHUSD','NAS100','US30','SPX500'];
@@ -19,13 +20,10 @@ function compactContext(c={}){
   ranked:(c.ranked||[]).slice(0,5).map(x=>({symbol:x.symbol,action:x.action,score:x.score,agreement:x.agreement,probability_up:x.probability_up,average_readiness:x.average_readiness})),
   news:{source:n.source,score:n.score,count:n.count,articles:(n.articles||[]).slice(0,10)},
   activity:{oil:a.oil,shipping:{count:s.count,analytics:s.analytics},news_count:a.news_count,event_risk:a.event_risk}}
+ }
 }
 
-async function api(path,opts){
- const r=await fetch(API+path,opts);const text=await r.text();let j;
- try{j=text?JSON.parse(text):{}}catch{j={detail:text||`HTTP ${r.status}`}}
- if(!r.ok)throw new Error(j.detail||j.error||`API ${r.status}`);return j
-}
+async function api(path,opts){const r=await fetch(API+path,opts);const text=await r.text();let j;try{j=text?JSON.parse(text):{}}catch{j={detail:text||`HTTP ${r.status}`}}if(!r.ok)throw new Error(j.detail||j.error||`API ${r.status}`);return j}
 async function post(path,body){return api(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})}
 async function get(path){return api(path)}
 
@@ -34,40 +32,23 @@ export default function TerminalEnhancements(){
  const creds=useMemo(credsLoad,[mode]);
  useEffect(()=>{
   const nativeFetch=window.fetch.bind(window);
-  window.fetch=async(input,init={})=>{
-   let nextInit=init;const url=typeof input==='string'?input:(input?.url||'');
-   if(url.includes('/api/luna')&&init?.body){try{const b=JSON.parse(init.body);if(b.context)b.context=compactContext(b.context);nextInit={...init,body:JSON.stringify(b)}}catch{}}
-   const r=await nativeFetch(input,nextInit);const ct=r.headers.get('content-type')||'';
-   if(url.includes('/api/')&&!ct.includes('application/json')){const text=await r.clone().text();return new Response(JSON.stringify({detail:text||`HTTP ${r.status}`}),{status:r.status,headers:{'Content-Type':'application/json'}})}
-   return r
-  };
+  window.fetch=async(input,init={})=>{let nextInit=init;const url=typeof input==='string'?input:(input?.url||'');if(url.includes('/api/luna')&&init?.body){try{const b=JSON.parse(init.body);if(b.context)b.context=compactContext(b.context);nextInit={...init,body:JSON.stringify(b)}}catch{}}const r=await nativeFetch(input,nextInit);const ct=r.headers.get('content-type')||'';if(url.includes('/api/')&&!ct.includes('application/json')){const text=await r.clone().text();return new Response(JSON.stringify({detail:text||`HTTP ${r.status}`}),{status:r.status,headers:{'Content-Type':'application/json'}})}return r};
   const apply=()=>{
    const sel=document.querySelector('.prodToolbar select');if(sel){const have=new Set([...sel.options].map(o=>o.value));FX_UNIVERSE.forEach(s=>{if(!have.has(s)){const o=document.createElement('option');o.value=s;o.textContent=s;sel.appendChild(o)}})}
-   const aside=document.querySelector('.prodApp aside');
+   const app=document.querySelector('.prodApp'),aside=app?.querySelector('aside'),head=app?.querySelector('.headActions');
+   if(head&&!head.querySelector('[data-sidebar-toggle]')){const b=document.createElement('button');b.dataset.sidebarToggle='1';b.className='sidebarToggle';b.innerHTML='<span>☰</span>';b.title='Open / close sidebar';b.onclick=()=>app?.classList.toggle('sideCollapsed');head.prepend(b)}
+   if(aside&&!aside.querySelector('[data-orderflow-desk]')){const b=document.createElement('button');b.dataset.orderflowDesk='1';b.innerHTML='<span style="font-size:16px">≋</span><span>Orderflow / Gamma</span>';b.onclick=()=>setMode('orderflow');aside.appendChild(b)}
    if(aside&&!aside.querySelector('[data-news-prediction]')){const b=document.createElement('button');b.dataset.newsPrediction='1';b.innerHTML='<span style="font-size:16px">◈</span><span>News Prediction</span>';b.onclick=()=>setMode('market');aside.appendChild(b)}
    if(aside&&!aside.querySelector('[data-news-event-analysis]')){const b=document.createElement('button');b.dataset.newsEventAnalysis='1';b.innerHTML='<span style="font-size:16px">◇</span><span>News Prediction Analysis</span>';b.onclick=()=>setMode('event');aside.appendChild(b)}
-   const gem=document.querySelector('.prodKeys input[placeholder*="Gemini"]');if(gem)gem.style.display='none';
-   document.querySelectorAll('.lunaHead p').forEach(p=>p.textContent='AI market intelligence using OpenRouter + compact NIGHT terminal context.');
+   const gem=document.querySelector('.prodKeys input[placeholder*="Gemini"]');if(gem)gem.style.display='none';document.querySelectorAll('.lunaHead p').forEach(p=>p.textContent='AI market intelligence using OpenRouter + compact NIGHT terminal context.');
   };
   apply();const mo=new MutationObserver(apply);mo.observe(document.body,{childList:true,subtree:true});return()=>{mo.disconnect();window.fetch=nativeFetch}
  },[]);
-
- async function runMarket(){setBusy(true);setError('');setAi('');try{
-   const baseNews=await Promise.all(NEWS_ASSETS.map(async s=>{try{return[s,await get(`/api/news/${s}`)]}catch{return[s,{articles:[],count:0}]}}));
-   const mtfs=await Promise.all(NEWS_ASSETS.map(async s=>{try{return[s,await post('/api/analyse-mtf',{symbol:s,timeframe:'15m',credentials:creds})]}catch{return[s,{valid:false}]}}));
-   const newsMap=Object.fromEntries(baseNews),mtfMap=Object.fromEntries(mtfs);
-   const built=NEWS_ASSETS.map(s=>{const n=newsMap[s]||{},m=mtfMap[s]||{},score=Number(n.score||0),p=Number(m.probability_up||50);let newsDir=score>.08?'BULLISH':score<-.08?'BEARISH':'NEUTRAL';let tech=m.action==='LONG'?'BULLISH':m.action==='SHORT'?'BEARISH':'NEUTRAL';let aligned=newsDir==='NEUTRAL'||tech==='NEUTRAL'||newsDir===tech;let evidence=Math.min(95,25+(n.count||0)*2+Math.abs(score)*35);let model=Math.min(95,Math.abs(p-50)*1.3+Number(m.agreement||0)*.45+Number(m.average_readiness||0)*.25);let confidence=Math.round(evidence*.45+model*.55);let direction=newsDir==='NEUTRAL'?tech:aligned?newsDir:'MIXED';return{symbol:s,direction,newsDir,tech,confidence,evidence,headlines:(n.articles||[]).slice(0,4),p,agreement:m.agreement||0,readiness:m.average_readiness||0,source:n.source||'—'}});
-   setRows(built.sort((a,b)=>b.confidence-a.confidence));
-   if(creds.openrouter_key){const context={assets:built.slice(0,7),headlines:Object.fromEntries(NEWS_ASSETS.map(s=>[s,(newsMap[s]?.articles||[]).slice(0,4)]))};const j=await post('/api/luna',{message:'Analyze the current released news in this context. Rank the strongest asset impacts, explain transmission through USD/yields/risk, conflicting evidence, invalidation, and distinguish actual released information from expectations. Include a confidence percentage for each conclusion; call it evidence confidence, not certainty.',context,credentials:creds});setAi(j.answer||'No AI response')}
-  }catch(e){setError(e.message)}finally{setBusy(false)}}
-
- async function runEvent(){setBusy(true);setError('');setAi('');try{
-   const d=await get(`/api/news-event?event=${encodeURIComponent(event)}&limit=35`);setEventData(d);
-   if(creds.openrouter_key){const context={event:d.event,source:d.source,hawkish_pct:d.hawkish_pct,dovish_pct:d.dovish_pct,neutral_pct:d.neutral_pct,evidence_confidence_pct:d.evidence_confidence_pct,headlines:(d.articles||[]).slice(0,12)};const q=`Analyze ${event} using ONLY the released/live headlines supplied. Explain whether the evidence is hawkish, dovish, or neutral; likely USD, XAUUSD, US yields, NAS100 and SPX500 impact; what is already known versus still expected; conflicting evidence; and invalidation. Use the supplied percentages as evidence scores, not guaranteed truth.`;const j=await post('/api/luna',{message:q,context,credentials:creds});setAi(j.answer||'No AI response')}
-  }catch(e){setError(e.message)}finally{setBusy(false)}}
+ async function runMarket(){setBusy(true);setError('');setAi('');try{const baseNews=await Promise.all(NEWS_ASSETS.map(async s=>{try{return[s,await get(`/api/news/${s}`)]}catch{return[s,{articles:[],count:0}]}}));const mtfs=await Promise.all(NEWS_ASSETS.map(async s=>{try{return[s,await post('/api/analyse-mtf',{symbol:s,timeframe:'15m',credentials:creds})]}catch{return[s,{valid:false}]}}));const newsMap=Object.fromEntries(baseNews),mtfMap=Object.fromEntries(mtfs);const built=NEWS_ASSETS.map(s=>{const n=newsMap[s]||{},m=mtfMap[s]||{},score=Number(n.score||0),p=Number(m.probability_up||50);let newsDir=score>.08?'BULLISH':score<-.08?'BEARISH':'NEUTRAL';let tech=m.action==='LONG'?'BULLISH':m.action==='SHORT'?'BEARISH':'NEUTRAL';let aligned=newsDir==='NEUTRAL'||tech==='NEUTRAL'||newsDir===tech;let evidence=Math.min(95,25+(n.count||0)*2+Math.abs(score)*35);let model=Math.min(95,Math.abs(p-50)*1.3+Number(m.agreement||0)*.45+Number(m.average_readiness||0)*.25);let confidence=Math.round(evidence*.45+model*.55);let direction=newsDir==='NEUTRAL'?tech:aligned?newsDir:'MIXED';return{symbol:s,direction,newsDir,tech,confidence,evidence,headlines:(n.articles||[]).slice(0,4),p,agreement:m.agreement||0,readiness:m.average_readiness||0,source:n.source||'—'}});setRows(built.sort((a,b)=>b.confidence-a.confidence));if(creds.openrouter_key){const context={assets:built.slice(0,7),headlines:Object.fromEntries(NEWS_ASSETS.map(s=>[s,(newsMap[s]?.articles||[]).slice(0,4)]))};const j=await post('/api/luna',{message:'Analyze the current released news in this context. Rank the strongest asset impacts, explain transmission through USD/yields/risk, conflicting evidence, invalidation, and distinguish actual released information from expectations. Include a confidence percentage for each conclusion; call it evidence confidence, not certainty.',context,credentials:creds});setAi(j.answer||'No AI response')}}catch(e){setError(e.message)}finally{setBusy(false)}}
+ async function runEvent(){setBusy(true);setError('');setAi('');try{const d=await get(`/api/news-event?event=${encodeURIComponent(event)}&limit=35`);setEventData(d);if(creds.openrouter_key){const context={event:d.event,source:d.source,hawkish_pct:d.hawkish_pct,dovish_pct:d.dovish_pct,neutral_pct:d.neutral_pct,evidence_confidence_pct:d.evidence_confidence_pct,headlines:(d.articles||[]).slice(0,12)};const q=`Analyze ${event} using ONLY the released/live headlines supplied. Explain whether the evidence is hawkish, dovish, or neutral; likely USD, XAUUSD, US yields, NAS100 and SPX500 impact; what is already known versus still expected; conflicting evidence; and invalidation. Use the supplied percentages as evidence scores, not guaranteed truth.`;const j=await post('/api/luna',{message:q,context,credentials:creds});setAi(j.answer||'No AI response')}}catch(e){setError(e.message)}finally{setBusy(false)}}
  useEffect(()=>{if(mode==='market'&&!rows.length)runMarket();if(mode==='event'&&!eventData)runEvent()},[mode]);
- if(!mode)return null;
- const close=()=>setMode(null);
+ if(!mode)return null;const close=()=>setMode(null);
+ if(mode==='orderflow')return createPortal(<OrderflowDesk onClose={close}/>,document.body);
  if(mode==='event')return createPortal(<div className="newsPredictionOverlay"><div className="newsPredShell"><div className="newsPredHead"><div><small>NIGHT EVENT INTELLIGENCE</small><h1>NEWS PREDICTION ANALYSIS</h1><p>Released headlines → Hawkish / Dovish / Neutral evidence → market transmission.</p></div><div><select className="eventSelect" value={event} onChange={e=>setEvent(e.target.value)}>{EVENTS.map(x=><option key={x}>{x}</option>)}</select><button onClick={runEvent}><RefreshCw size={14}/>{busy?' ANALYZING…':' ANALYZE'}</button><button onClick={close}>CLOSE</button></div></div>{error&&<div className="prodError">{error}</div>}{eventData&&<><div className="policyMeter"><div><span>HAWKISH</span><b>{fmt(eventData.hawkish_pct)}%</b><i><em style={{width:`${eventData.hawkish_pct}%`}}/></i></div><div><span>DOVISH</span><b>{fmt(eventData.dovish_pct)}%</b><i><em style={{width:`${eventData.dovish_pct}%`}}/></i></div><div><span>NEUTRAL</span><b>{fmt(eventData.neutral_pct)}%</b><i><em style={{width:`${eventData.neutral_pct}%`}}/></i></div><div><span>EVIDENCE CONFIDENCE</span><b>{fmt(eventData.evidence_confidence_pct)}%</b><i><em style={{width:`${eventData.evidence_confidence_pct}%`}}/></i></div></div><section className="newsAiBrief"><h3>LIVE RELEASE EVIDENCE · {eventData.source}</h3><div className="headlineStack">{(eventData.articles||[]).slice(0,15).map((h,i)=><article key={i}><b>{h.title}</b><span>{h.domain||''} · policy score {fmt(h.policy_score,2)}</span></article>)}</div></section></>}<section className="newsAiBrief"><h3>LUNA / OPENROUTER — EVENT ANALYSIS</h3><pre>{ai||(creds.openrouter_key?'Analyzing…':'Add OpenRouter key for AI narrative. Percentages/headlines work without AI.')}</pre></section></div></div>,document.body);
  return createPortal(<div className="newsPredictionOverlay"><div className="newsPredShell"><div className="newsPredHead"><div><small>NIGHT INTELLIGENCE</small><h1>NEWS PREDICTION</h1><p>Live headlines + current MTF technical state. Confidence is evidence strength, not guaranteed accuracy.</p></div><div><button onClick={runMarket}><RefreshCw size={14}/>{busy?' ANALYZING…':' REFRESH'}</button><button onClick={close}>CLOSE</button></div></div>{error&&<div className="prodError">{error}</div>}<div className="newsPredGrid">{rows.map((r,i)=><section key={r.symbol} className="newsPredCard"><div className="newsPredRank">#{i+1} NEWS OPPORTUNITY <b>{r.direction}</b></div><h2>{r.symbol}<strong>{r.confidence}%</strong></h2><div className="decisionGrid"><div><span>NEWS BIAS</span><b>{r.newsDir}</b></div><div><span>TECH MTF</span><b>{r.tech}</b></div><div><span>P↑</span><b>{fmt(r.p)}%</b></div><div><span>AGREEMENT</span><b>{fmt(r.agreement)}%</b></div><div><span>READINESS</span><b>{fmt(r.readiness)}%</b></div><div><span>EVIDENCE CONF.</span><b>{fmt(r.evidence)}%</b></div></div><div className="headlineStack">{r.headlines.map((h,j)=><article key={j}><b>{h.title||'Untitled headline'}</b><span>{h.domain||''} · {r.source}</span></article>)}</div></section>)}</div><section className="newsAiBrief"><h3>OPENROUTER AI — RELEASED NEWS TRANSMISSION BRIEF</h3><pre>{ai||(creds.openrouter_key?'Generating…':'Add OpenRouter key for AI narrative.')}</pre></section></div></div>,document.body)
 }
