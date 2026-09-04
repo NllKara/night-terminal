@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@microsoft/signalr": "^8.0.7",
     "@vitejs/plugin-react": "latest",
     "lucide-react": "latest",
     "vite": "latest",
