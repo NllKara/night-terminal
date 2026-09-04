@@ -11,5 +11,6 @@ import'./ndr-layout.css';
 import'./news-prediction.css';
 import'./orderflow.css';
 import'./tablet-fixes.css';
+import'./macro-prediction.css';
 
 createRoot(document.getElementById('root')).render(<><ProductionApp/><TerminalEnhancements/><FastKeySave/></>);
