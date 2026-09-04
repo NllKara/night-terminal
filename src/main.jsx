@@ -10,5 +10,6 @@ import'./production.css';
 import'./ndr-layout.css';
 import'./news-prediction.css';
 import'./orderflow.css';
+import'./tablet-fixes.css';
 
 createRoot(document.getElementById('root')).render(<><ProductionApp/><TerminalEnhancements/><FastKeySave/></>);
