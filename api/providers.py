@@ -14,6 +14,7 @@ def _z_last_change(xs):
     d=[b-a for a,b in zip(xs[:-1],xs[1:])];s=_stdev(d[:-1]);return 0.0 if s==0 else (d[-1]-_mean(d[:-1]))/s
 def _squash(x,scale=2.0):return math.tanh(x/scale)
 def _interval_map(tf):return {"1m":"1min","5m":"5min","15m":"15min","1h":"1h","4h":"4h","1D":"1day","1d":"1day"}.get(tf,"5min")
+def _biquote_interval(tf):return {"1m":"1m","5m":"5m","15m":"15m","1h":"1h","4h":"4h","1D":"1d","1d":"1d"}.get(tf,"5m")
 def _oanda_granularity(tf):return {"1m":"M1","5m":"M5","15m":"M15","1h":"H1","4h":"H4","1D":"D","1d":"D"}.get(tf,"M5")
 
 def _is_fx_pair(symbol:str)->bool:
@@ -38,8 +39,23 @@ def _binance_symbol(symbol):return {"BTCUSD":"BTCUSDT","ETHUSD":"ETHUSDT"}.get(s
 class MarketProvider:
     async def snapshot(self,symbol:str,timeframe:str,credentials:dict|None=None)->dict:
         credentials=credentials or {};errors=[];sym=symbol.upper().replace("/","")
+        # Free/no-key primary feed. BiQuote exposes MT5-backed FX/metals/CFD OHLC plus tick volume.
+        try:
+            params=urllib.parse.urlencode({"interval":_biquote_interval(timeframe),"limit":300})
+            data=_get_json(f"https://biquote.io/api/{urllib.parse.quote(sym)}/ohlc?{params}",timeout=10)
+            rows=data.get("bars",[]) if isinstance(data,dict) else []
+            bars=[]
+            # BiQuote returns newest-first. Normalize to oldest-first for the quant engine.
+            for r in reversed(rows):
+                try:
+                    bars.append({"time":r.get("openTime"),"open":float(r["open"]),"high":float(r["high"]),"low":float(r["low"]),"close":float(r["close"]),"volume":float(r.get("tickVolume") or r.get("volume") or 0)})
+                except Exception:pass
+            if len(bars)>=30:
+                has_vol=sum(b["volume"] for b in bars[-30:])>0
+                return {"bars":bars,"source":f"BiQuote {sym} (MT5/public)","volume_type":"tick volume" if has_vol else "price-only technical analysis","freshness":1.0,"is_proxy":False,"instrument":sym,"price_data_real":True}
+        except Exception as e:errors.append(f"BiQuote: {type(e).__name__}")
+        # Twelve Data remains a fallback when configured.
         td_key=credentials.get("twelve_key") or os.environ.get("TWELVE_DATA_API_KEY")
-        # Price-first primary source: exact same FX/metal/index/crypto instrument through Twelve Data.
         if td_key:
             try:
                 params=urllib.parse.urlencode({"symbol":_symbol_td(sym),"interval":_interval_map(timeframe),"outputsize":240,"apikey":td_key,"format":"JSON"})
@@ -53,7 +69,7 @@ class MarketProvider:
                     has_vol=sum(b["volume"] for b in bars[-30:])>0
                     return {"bars":bars,"source":f"Twelve Data {_symbol_td(sym)}","volume_type":"provider/tick volume" if has_vol else "no centralized volume; price-only technical analysis","freshness":1.0,"is_proxy":False,"instrument":_symbol_td(sym),"price_data_real":True}
             except Exception as e:errors.append(f"Twelve Data: {type(e).__name__}")
-        # OANDA exact-instrument fallback for FX and spot metals when user has credentials.
+        # Optional OANDA fallback only when credentials exist; NIGHT never depends on it.
         token=credentials.get("oanda_token") or os.environ.get("OANDA_TOKEN")
         if token and (_is_fx_pair(sym) or sym in {"XAUUSD","XAGUSD"}):
             try:
@@ -64,7 +80,6 @@ class MarketProvider:
                     if m:bars.append({"time":c.get("time"),"open":float(m["o"]),"high":float(m["h"]),"low":float(m["l"]),"close":float(m["c"]),"volume":float(c.get("volume",0))})
                 if len(bars)>=30:return {"bars":bars,"source":f"OANDA {inst}","volume_type":"tick volume (price-update count)","freshness":1.0,"is_proxy":False,"instrument":inst,"price_data_real":True}
             except Exception as e:errors.append(f"OANDA: {type(e).__name__}")
-        # Crypto public exchange fallback.
         bsym=_binance_symbol(sym)
         if bsym:
             try:
