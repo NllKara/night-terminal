@@ -4,12 +4,12 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from api.engine import analyse
 from api.providers import MarketProvider, MacroProvider
-from api.intelligence import intelligence_snapshot, fetch_news, fetch_cot_gold
+from api.intelligence import intelligence_snapshot, fetch_news, fetch_event_news, fetch_cot_gold
 from api.market_activity import activity_snapshot, oil_snapshot, shipping_snapshot, shipping_exposure
 from api.equity_data import equity_snapshot, equity_bars, search_equities
 from api.luna import ask_luna
 
-app=FastAPI(title="NIGHT Quant Terminal API",version="0.8.0");market=MarketProvider();macro=MacroProvider()
+app=FastAPI(title="NIGHT Quant Terminal API",version="0.8.1");market=MarketProvider();macro=MacroProvider()
 class Credentials(BaseModel):
     twelve_key:str|None=None;fred_key:str|None=None;gemini_key:str|None=None;openrouter_key:str|None=None;oanda_token:str|None=None;oanda_account:str|None=None
 class AnalysisRequest(BaseModel):
@@ -30,7 +30,7 @@ def _event_risk_from_news(news:dict)->float:
         t=(a.get("title") or "").lower();hits+=sum(1 for k in keys if k in t)
     return min(86.0,18.0+hits*4.0)
 @app.get("/api/health")
-def health():return {"status":"ok","service":"night-quant-terminal","version":"0.8.0"}
+def health():return {"status":"ok","service":"night-quant-terminal","version":"0.8.1"}
 
 async def _institutional_context(symbol:str,creds:dict):
     macro_data=await macro.snapshot(symbol,creds);intel=intelligence_snapshot(symbol);news=intel.get("news",{});cot=intel.get("cot",{});activity=activity_snapshot();base_macro=float(macro_data.get("macro_score",0.0));base_inter=float(macro_data.get("intermarket_score",0.0));news_score=float(news.get("score",0.0));cot_score=float(cot.get("score",0.0)) if symbol.upper()=="XAUUSD" else 0.0
@@ -77,6 +77,8 @@ def luna(req:LunaRequest):
     creds=req.credentials.model_dump(exclude_none=True) if req.credentials else {};return ask_luna(req.message,req.context or {},creds)
 @app.get("/api/news/{symbol}")
 def live_news(symbol:str):return fetch_news(symbol)
+@app.get("/api/news-event")
+def live_event_news(event:str="NFP",limit:int=30):return fetch_event_news(event,max(5,min(limit,50)))
 @app.get("/api/cot/gold")
 def cot_gold():return fetch_cot_gold()
 @app.get("/api/activity")
@@ -93,4 +95,4 @@ def quant_chat(req:ChatRequest):
 @app.get("/api/calendar")
 async def calendar():return {"events":await macro.calendar()}
 @app.get("/api/modules")
-def modules():return {"modules":["Searchable US/IDX Equity Universe","Realtime/Latest Equity Market Data","Equity Signals","Equity MTF Direction","Stock Shipping Exposure","Global AIS Shipping Analytics","SEC EDGAR Fundamentals","Twelve Data Global Fundamentals","Exact MTF Quant","Volume/Flow","Regime","Probability/EV","FRED Macro","GDELT News Intelligence","CFTC COT Positioning","WTI/Brent/NatGas","Trade Readiness","Luna AI","Report Engine"]}
+def modules():return {"modules":["Searchable US/IDX Equity Universe","Realtime/Latest Equity Market Data","Equity Signals","Equity MTF Direction","Stock Shipping Exposure","Global AIS Shipping Analytics","SEC EDGAR Fundamentals","Twelve Data Global Fundamentals","Exact MTF Quant","Volume/Flow","Regime","Probability/EV","FRED Macro","Live News with GDELT + Google News fallback","Event News Hawkish/Dovish Analysis","CFTC COT Positioning","WTI/Brent/NatGas","Trade Readiness","Luna AI via OpenRouter","Report Engine"]}
