@@ -29,20 +29,16 @@ def _type_blob(p):
     return " ".join(str(p.get(k) or "") for k in keys).lower()
 
 def _type_code(p):
-    for k in ("ship_type","shipTypeCode","ship_type_code","aisType","ais_type","typeCode"):
+    # Open Waters /v1/vessels uses properties.type for the AIS ship/cargo code.
+    for k in ("type","ship_type","shipType","shipTypeCode","ship_type_code","aisType","ais_type","typeCode"):
         try:
             v=int(float(p.get(k)))
             if 0<=v<=99:return v
         except Exception:pass
-    try:
-        v=int(float(p.get("shipType")))
-        if 0<=v<=99:return v
-    except Exception:pass
     return None
 
 def _kind(p):
     raw=_type_blob(p);c=_type_code(p)
-    # Prefer semantic labels when the source exposes them.
     if any(x in raw for x in ("lng tanker","lng carrier","liquefied natural gas")):return "LNG_TANKER"
     if any(x in raw for x in ("lpg tanker","lpg carrier","liquefied petroleum")):return "LPG_TANKER"
     if any(x in raw for x in ("chemical tanker","chem tanker")):return "CHEMICAL_TANKER"
@@ -58,16 +54,17 @@ def _kind(p):
     if any(x in raw for x in ("dredger","dredging")):return "DREDGER"
     if any(x in raw for x in ("pleasure","yacht")):return "PLEASURE"
     if any(x in raw for x in ("high speed","hsc")):return "HIGH_SPEED"
-    # AIS type ranges still give useful broad classification even when text labels are missing.
+    # ITU/AIS ship and cargo type code ranges. Open Waters exposes this as properties.type.
     if c is not None:
-        if 80<=c<90:return "TANKER"
-        if 70<=c<80:return "CARGO"
-        if 60<=c<70:return "PASSENGER"
-        if 40<=c<50:return "HIGH_SPEED"
+        if 80<=c<=89:return "TANKER"
+        if 70<=c<=79:return "CARGO"
+        if 60<=c<=69:return "PASSENGER"
+        if 40<=c<=49:return "HIGH_SPEED"
         if c==30:return "FISHING"
         if c in {31,32,52}:return "TUG"
         if c==33:return "DREDGER"
         if c in {36,37}:return "PLEASURE"
+        if c in {50,51,53,54,55,56,57,58,59}:return "SERVICE"
     if any(x in raw for x in ("cargo","container","bulk")):return "CARGO"
     return "OTHER"
 
@@ -81,9 +78,9 @@ def _near(lat,lon,clat,clon,deg):
     return abs(float(lat)-clat)<=deg and abs(float(lon)-clon)<=deg
 
 def shipping_snapshot(limit:int=700)->dict:
-    """Global anonymous AIS snapshot from Open Waters. Coverage and available static vessel metadata depend on contributing feeds."""
+    """Global anonymous AIS snapshot from Open Waters. Coverage and static metadata depend on contributing feeds."""
     try:
-        data=_get_json("https://ais.openwaters.io/v1/vessels",timeout=20);features=data.get("features",[]) if isinstance(data,dict) else [];vessels=[];types={};groups={"CARGO":0,"TANKER":0,"PASSENGER":0,"FISHING":0,"TUG":0,"OTHER":0};chokes={k:0 for k in CHOKEPOINTS};moving=0;slow=0
+        data=_get_json("https://ais.openwaters.io/v1/vessels",timeout=20);features=data.get("features",[]) if isinstance(data,dict) else [];vessels=[];types={};groups={"CARGO":0,"TANKER":0,"PASSENGER":0,"FISHING":0,"TUG":0,"SERVICE":0,"OTHER":0};chokes={k:0 for k in CHOKEPOINTS};moving=0;slow=0
         for f in features:
             p=f.get("properties",{}) or {};g=f.get("geometry",{}) or {};coords=g.get("coordinates") or [None,None];lon=coords[0] if coords else None;lat=coords[1] if len(coords)>1 else None;k=_kind(p);grp=_group(k);types[k]=types.get(k,0)+1;groups[grp]=groups.get(grp,0)+1
             speed=p.get("sog") if p.get("sog") is not None else p.get("speed")
@@ -93,7 +90,7 @@ def shipping_snapshot(limit:int=700)->dict:
             for name,(a,b,d) in CHOKEPOINTS.items():
                 if _near(lat,lon,a,b,d):chokes[name]+=1
             if len(vessels)<limit:
-                vessels.append({"mmsi":p.get("mmsi"),"imo":p.get("imo"),"name":p.get("name") or p.get("shipName"),"lat":lat,"lon":lon,"speed":speed,"course":p.get("cog") or p.get("course"),"heading":p.get("heading"),"status":p.get("navigationStatus") or p.get("status"),"destination":p.get("destination"),"callsign":p.get("callsign"),"type":k,"group":grp,"ais_type_code":_type_code(p),"raw_type":_type_blob(p) or None})
+                vessels.append({"mmsi":p.get("mmsi"),"imo":p.get("imo"),"name":p.get("name") or p.get("shipName"),"lat":lat,"lon":lon,"speed":speed,"course":p.get("cog") or p.get("course"),"heading":p.get("heading"),"status":p.get("nav_status") if p.get("nav_status") is not None else p.get("navigationStatus") or p.get("status"),"destination":p.get("destination"),"callsign":p.get("callsign"),"type":k,"group":grp,"ais_type_code":_type_code(p),"raw_type":p.get("typeName") or p.get("shipType") or p.get("type"),"seen":p.get("seen"),"source":p.get("source"),"station":p.get("station"),"msg_type":p.get("msg_type")})
         total=len(features);congestion=max(chokes.values()) if chokes else 0
         return {"source":"Open Waters global AIS","coverage":"receiver/source dependent","count":total,"returned":len(vessels),"vessels":vessels,"analytics":{"types":types,"groups":groups,"chokepoints":chokes,"moving":moving,"slow":slow,"congestion_peak":congestion,"congestion_state":"HIGH" if congestion>=120 else "ELEVATED" if congestion>=60 else "NORMAL"}}
     except Exception as e:return {"source":"Open Waters global AIS","coverage":"unavailable","count":0,"returned":0,"vessels":[],"analytics":{"types":{},"groups":{},"chokepoints":{}},"error":type(e).__name__}
