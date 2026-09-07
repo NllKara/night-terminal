@@ -4,6 +4,8 @@ import math
 import statistics
 from typing import Dict, List
 
+from .quant_library import evaluate_model_library
+
 
 def clamp(v: float, lo: float = 0.0, hi: float = 100.0) -> float:
     return max(lo, min(hi, v))
@@ -134,118 +136,73 @@ def signed_volume_pressure(bars: List[dict], n: int = 20) -> float:
 def calculate_quant(bars: List[dict], macro: Dict[str, float] | None = None, event_risk: float = 20.0, source: str = "unknown", volume_type: str = "unknown") -> dict:
     macro = macro or {}
     if len(bars) < 30:
-        return {
-            "valid": False,
-            "reason": "Need at least 30 OHLCV candles for quant analysis.",
-            "data_quality": 0,
-            "source": source,
-            "volume_type": volume_type,
-        }
+        return {"valid": False, "reason": "Need at least 30 OHLCV candles for quant analysis.", "data_quality": 0, "source": source, "volume_type": volume_type}
 
     closes = [float(b["close"]) for b in bars]
     vols = [float(b.get("volume", 0.0)) for b in bars]
     rets = log_returns(closes)
     recent_rets = rets[-30:]
     sigma = stdev(recent_rets) or 1e-12
-
-    # 1) multi-horizon standardized momentum
     h5 = sum(rets[-5:]) / (sigma * math.sqrt(5)) if len(rets) >= 5 else 0.0
     h15 = sum(rets[-15:]) / (sigma * math.sqrt(15)) if len(rets) >= 15 else 0.0
     momentum_z = 0.65 * h5 + 0.35 * h15
-
-    # 2) OLS trend significance on log-price
     logp = [math.log(max(x, 1e-12)) for x in closes[-40:]]
     reg = linreg_t(logp)
     trend_t = reg["t"]
-
-    # 3) Kaufman efficiency ratio: 0 noisy/range -> 1 directional
     er = efficiency_ratio(closes, 20)
-
-    # 4) realized volatility + relative ATR
-    rv = sigma * math.sqrt(252 * 24 * 12)  # normalized reference for intraday; used comparatively
+    rv = sigma * math.sqrt(252 * 24 * 12)
     trs = true_ranges(bars)
     atr = mean(trs[-14:])
     atr_pct = atr / max(closes[-1], 1e-12)
     atr_hist = [mean(trs[max(0, i-13):i+1]) / max(closes[i], 1e-12) for i in range(max(13, len(bars)-60), len(bars))]
     atr_z = zscore(atr_pct, atr_hist[:-1]) if len(atr_hist) > 2 else 0.0
-
-    # 5) standardized current volume and signed volume-pressure proxy
     vol_z = zscore(vols[-1], vols[-31:-1]) if len(vols) >= 31 else 0.0
     svp = signed_volume_pressure(bars, 20)
-
-    # 6) volume profile from observed candle volume/tick-volume
     vp = volume_profile(bars[-120:], 32)
     vp_score = math.tanh(vp["position"] / 4.0) if vp["poc"] is not None else 0.0
-
-    # 7) structure: normalized location inside rolling 20-bar range
     h20 = max(b["high"] for b in bars[-20:]); l20 = min(b["low"] for b in bars[-20:])
     structure = 0.0 if h20 == l20 else 2.0 * ((closes[-1] - l20) / (h20 - l20)) - 1.0
     structure = max(-1.0, min(1.0, structure))
-
-    # 8) macro/intermarket inputs are already normalized [-1, +1]
     macro_score = max(-1.0, min(1.0, float(macro.get("macro_score", 0.0))))
     intermarket = max(-1.0, min(1.0, float(macro.get("intermarket_score", 0.0))))
-
-    # Squash unbounded statistics to [-1,+1]
     mom_s = math.tanh(momentum_z / 2.0)
     trend_s = math.tanh(trend_t / 3.0) * (0.45 + 0.55 * er)
     volflow_s = math.tanh(vol_z / 2.0) * 0.35 + svp * 0.65
 
-    # Composite latent edge. Weights sum to 1.
-    components = {
-        "momentum": mom_s,
-        "trend": trend_s,
-        "structure": structure,
-        "volume_flow": volflow_s,
-        "volume_profile": vp_score,
-        "macro": macro_score,
-        "intermarket": intermarket,
-    }
-    weights = {
-        "momentum": 0.18,
-        "trend": 0.20,
-        "structure": 0.12,
-        "volume_flow": 0.20,
-        "volume_profile": 0.10,
-        "macro": 0.10,
-        "intermarket": 0.10,
-    }
-    edge = sum(components[k] * weights[k] for k in components)
+    model_library = evaluate_model_library(bars, macro)
+    lib = model_library.get("active_outputs", {})
+    stat = lib.get("stat_arb_mean_reversion_econometrics", {})
+    signal = lib.get("signal_processing_time_series_ml", {})
+    micro = lib.get("execution_microstructure_hft", {})
+    volpack = lib.get("stochastic_options_volatility", {})
+    z_lib = float(stat.get("z_score", 0.0) or 0.0)
+    hurst = stat.get("hurst_exponent")
+    kalman_innovation = float(signal.get("innovation_pct", 0.0) or 0.0)
+    holt_trend = float(signal.get("trend", 0.0) or 0.0) / max(closes[-1], 1e-12)
+    vwap_lib = micro.get("vwap")
+    vwap_bias = 0.0 if vwap_lib is None else math.tanh((closes[-1] - float(vwap_lib)) / max(atr, 1e-12))
+    mean_reversion_s = -math.tanh(z_lib / 2.5)
+    kalman_s = math.tanh(kalman_innovation * 180.0)
+    forecast_s = math.tanh(holt_trend * 300.0)
+    hurst_gate = 1.0 if hurst is None else max(0.35, min(1.0, 0.65 + abs(float(hurst) - 0.5)))
+    model_edge = (0.28 * mean_reversion_s + 0.24 * kalman_s + 0.20 * forecast_s + 0.28 * vwap_bias) * hurst_gate
 
-    # Disagreement penalty: higher dispersion among directional factors -> lower confidence.
+    components = {"momentum": mom_s, "trend": trend_s, "structure": structure, "volume_flow": volflow_s, "volume_profile": vp_score, "macro": macro_score, "intermarket": intermarket, "model_library": model_edge}
+    weights = {"momentum": 0.15, "trend": 0.17, "structure": 0.10, "volume_flow": 0.16, "volume_profile": 0.08, "macro": 0.10, "intermarket": 0.10, "model_library": 0.14}
+    edge = sum(components[k] * weights[k] for k in components)
     dispersion = stdev(list(components.values()))
     conflict = clamp(dispersion / 0.85 * 100.0)
-
-    # Probability via logistic mapping of latent edge.
-    p_up = sigmoid(3.2 * edge)
-    p_down = 1.0 - p_up
-
-    # Expected value for a canonical 1.5R target / 1R risk before costs.
+    p_up = sigmoid(3.2 * edge); p_down = 1.0 - p_up
     rr = 1.5
-    ev_long = p_up * rr - p_down
-    ev_short = p_down * rr - p_up
-
+    ev_long = p_up * rr - p_down; ev_short = p_down * rr - p_up
     has_volume = sum(vols[-20:]) > 0
     freshness = float(macro.get("freshness", 1.0))
     dq = 55.0 + (20.0 if has_volume else -20.0) + 15.0 * max(0.0, min(1.0, freshness))
     dq -= min(25.0, float(event_risk) * 0.18)
     data_quality = clamp(dq)
-
     confidence = clamp(100.0 * abs(p_up - 0.5) * 2.0 * (0.55 + 0.45 * data_quality / 100.0) * (1.0 - min(conflict, 90.0) / 180.0))
-
-    edge_strength = abs(edge)
-    readiness = clamp(
-        100.0 * (
-            0.48 * min(1.0, edge_strength / 0.45) +
-            0.22 * data_quality / 100.0 +
-            0.15 * min(1.0, er / 0.55) +
-            0.15 * min(1.0, abs(volflow_s))
-        ) - float(event_risk) * 0.28 - conflict * 0.10
-    )
-
-    if not has_volume or data_quality < 35:
-        action = "NO TRADE"
-    elif float(event_risk) >= 85:
+    readiness = clamp(100.0 * (0.48 * min(1.0, abs(edge) / 0.45) + 0.22 * data_quality / 100.0 + 0.15 * min(1.0, er / 0.55) + 0.15 * min(1.0, abs(volflow_s))) - float(event_risk) * 0.28 - conflict * 0.10)
+    if not has_volume or data_quality < 35 or float(event_risk) >= 85:
         action = "NO TRADE"
     elif p_up >= 0.58 and ev_long > 0.10 and readiness >= 48:
         action = "LONG"
@@ -253,64 +210,30 @@ def calculate_quant(bars: List[dict], macro: Dict[str, float] | None = None, eve
         action = "SHORT"
     else:
         action = "WAIT"
-
     bias = "BULLISH" if p_up >= 0.55 else "BEARISH" if p_up <= 0.45 else "NEUTRAL"
     regime = "TREND" if abs(trend_t) >= 2.0 and er >= 0.35 else "VOLATILE" if atr_z >= 1.0 else "RANGE"
     aggression = clamp(50.0 + 50.0 * svp)
     greed = clamp(50.0 + 22.0 * mom_s + 18.0 * trend_s + 10.0 * max(-1.0, min(1.0, atr_z / 2.0)))
 
     return {
-        "valid": True,
-        "source": source,
-        "volume_type": volume_type,
-        "last_price": closes[-1],
-        "bias": bias,
-        "action": action,
-        "regime": regime,
-        "score": round(50.0 + edge * 50.0, 2),
-        "edge": round(edge, 4),
-        "probability_up": round(p_up * 100.0, 2),
-        "probability_down": round(p_down * 100.0, 2),
-        "ev_long_r": round(ev_long, 3),
-        "ev_short_r": round(ev_short, 3),
-        "confidence": round(confidence, 2),
-        "trade_readiness": round(readiness, 2),
-        "buyer_aggression": round(aggression, 2),
-        "seller_aggression": round(100.0 - aggression, 2),
-        "greed": round(greed, 2),
-        "event_risk": round(float(event_risk), 2),
-        "volatility": round(clamp(50 + 16 * atr_z), 2),
-        "data_quality": round(data_quality, 2),
-        "conflict": round(conflict, 2),
+        "valid": True, "source": source, "volume_type": volume_type, "last_price": closes[-1], "bias": bias, "action": action, "regime": regime,
+        "score": round(50.0 + edge * 50.0, 2), "edge": round(edge, 4), "probability_up": round(p_up * 100.0, 2), "probability_down": round(p_down * 100.0, 2),
+        "ev_long_r": round(ev_long, 3), "ev_short_r": round(ev_short, 3), "confidence": round(confidence, 2), "trade_readiness": round(readiness, 2),
+        "buyer_aggression": round(aggression, 2), "seller_aggression": round(100.0 - aggression, 2), "greed": round(greed, 2), "event_risk": round(float(event_risk), 2),
+        "volatility": round(clamp(50 + 16 * atr_z), 2), "data_quality": round(data_quality, 2), "conflict": round(conflict, 2),
         "volume_profile": {k: (round(v, 5) if isinstance(v, (int, float)) and v is not None else v) for k, v in vp.items()},
-        "components": {k: round(v, 4) for k, v in components.items()},
-        "weights": weights,
-        "math": {
-            "momentum_z": round(momentum_z, 4),
-            "trend_t_stat": round(trend_t, 4),
-            "trend_r2": round(reg["r2"], 4),
-            "efficiency_ratio": round(er, 4),
-            "realized_vol": round(rv, 6),
-            "atr_pct": round(atr_pct, 6),
-            "atr_z": round(atr_z, 4),
-            "volume_z": round(vol_z, 4),
-            "signed_volume_pressure": round(svp, 4),
-            "structure_location": round(structure, 4),
-        },
-        "formula": "edge=Σ(w_i*x_i); p_up=sigmoid(3.2*edge); EV_long=1.5*p_up-(1-p_up); confidence penalizes factor dispersion; readiness combines edge strength, data quality, efficiency ratio, volume-flow, event/conflict penalties.",
+        "components": {k: round(v, 4) for k, v in components.items()}, "weights": weights,
+        "model_library": model_library,
+        "model_summary": {"z_score": round(z_lib, 4), "hurst": hurst, "kalman_innovation_pct": signal.get("innovation_pct"), "holt_trend": signal.get("trend"), "vwap": vwap_lib, "garch_sigma": volpack.get("garch_sigma")},
+        "math": {"momentum_z": round(momentum_z, 4), "trend_t_stat": round(trend_t, 4), "trend_r2": round(reg["r2"], 4), "efficiency_ratio": round(er, 4), "realized_vol": round(rv, 6), "atr_pct": round(atr_pct, 6), "atr_z": round(atr_z, 4), "volume_z": round(vol_z, 4), "signed_volume_pressure": round(svp, 4), "structure_location": round(structure, 4)},
+        "formula": "Core edge blends observed price/volume/macro factors with input-gated institutional model outputs. Missing option/depth/cross-series inputs are never fabricated.",
         "scenario": f"{bias.title()} {regime.lower()} regime. Quant edge {edge:+.3f}; P(up) {p_up*100:.1f}%; P(down) {p_down*100:.1f}%.",
-        "invalidation": "Thesis weakens when composite edge crosses zero, probability returns inside 45–55%, or volume-flow/trend signs reverse together.",
+        "invalidation": "Thesis weakens when composite edge crosses zero, probability returns inside 45–55%, or volume-flow/trend/model signs reverse together.",
     }
 
 
 def analyse(symbol: str, timeframe: str, inputs: Dict) -> dict:
     bars = inputs.get("bars") or []
-    result = calculate_quant(
-        bars,
-        macro=inputs.get("macro") or {},
-        event_risk=float(inputs.get("event_risk", 20.0)),
-        source=inputs.get("source", "unknown"),
-        volume_type=inputs.get("volume_type", "unknown"),
-    )
+    result = calculate_quant(bars, macro=inputs.get("macro") or {}, event_risk=float(inputs.get("event_risk", 20.0)), source=inputs.get("source", "unknown"), volume_type=inputs.get("volume_type", "unknown"))
     result.update({"symbol": symbol.upper(), "timeframe": timeframe})
     return result
